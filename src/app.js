@@ -331,6 +331,15 @@ function agendaRows() {
         '<p class="muted">'+t('Aún no hay registros.')+'</p>')+'</section>';
   }).join('');
 }
+function showFeed(token) {
+  const link=url+'/functions/v1/calendar-feed?key='+encodeURIComponent(token||'');
+  editor.innerHTML='<h2>'+t('Suscribir mi calendario')+'</h2><p>'+t('Este enlace da acceso al título, fecha y hora de los eventos del hogar. Compártelo solo con tu servicio de calendario.')+
+    '</p><p>'+t('En Google Calendar web, añade otro calendario desde una URL. En Samsung, sincroniza esa misma cuenta Google.')+'</p>'+
+    (token?'<label>'+t('Enlace privado')+'<input readonly value="'+escape(link)+'"></label><button data-act="revokeCalendarFeed">'+t('Revocar enlace')+'</button>':
+    '<button data-act="createCalendarFeed" class="primary">'+t('Generar enlace privado')+'</button>')+
+    '<button data-act="close">'+t('Cerrar')+'</button>';
+  if(!editor.open) editor.showModal();
+}
 function calendar() {
   const first = new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),1,12);
   const start = new Date(first);
@@ -352,7 +361,7 @@ function listing(kind) {
   return '<p class="muted">'+descriptions[kind]+'</p>'+
     (kind==='deadline'?'<section class="hero"><h2>'+t('Próximos 7 días y vencidos')+'</h2>'+
       '<p>'+active('deadline').filter(item=>!item.done&&item.entry_date<=shiftDate(dateKey(),7)).length+'</p></section>':'')+
-    (kind==='event'?calendar()+'<section class="panel"><div class="filters"><label>'+t('Vista')+'<select id="agenda-mode">'+opts([['day',t('Día')],['week',t('Semana')]],agendaWeek?'week':'day')+'</select></label><label>'+t('Tipo')+'<select id="agenda-kind">'+opts([['all',t('Todos')],...agendaKinds.map(k=>[k,modules[k][0]])],agendaKind)+'</select></label><label>'+t('Responsable')+'<select id="agenda-person">'+opts([['all',t('Todos')],...members.map(m=>[m.user_id,m.name])],agendaPerson)+'</select></label></div><div class="actions"><button data-act="calendarImport">'+t('Importar ICS')+'</button><button data-act="calendarExport">'+t('Exportar ICS')+'</button><button data-act="scanEvent">'+t('Foto o PDF')+'</button><button data-act="googleCalendar">Google Calendar</button></div></section>':kind==='budget'?budgetSummary():kind==='expense'?("<section class=\"hero\"><small>"+t("Gastos registrados en "))+dateLabel(dateKey(),{month:'long'})+'</small><h2>'+money(total)+'</h2></section>':'')+
+    (kind==='event'?calendar()+'<section class="panel"><div class="filters"><label>'+t('Vista')+'<select id="agenda-mode">'+opts([['day',t('Día')],['week',t('Semana')]],agendaWeek?'week':'day')+'</select></label><label>'+t('Tipo')+'<select id="agenda-kind">'+opts([['all',t('Todos')],...agendaKinds.map(k=>[k,modules[k][0]])],agendaKind)+'</select></label><label>'+t('Responsable')+'<select id="agenda-person">'+opts([['all',t('Todos')],...members.map(m=>[m.user_id,m.name])],agendaPerson)+'</select></label></div><div class="actions"><button data-act="calendarImport">'+t('Importar ICS')+'</button><button data-act="calendarExport">'+t('Exportar ICS')+'</button><button data-act="scanEvent">'+t('Foto o PDF')+'</button><button data-act="calendarFeed">'+t('Suscribir mi calendario')+'</button><button data-act="googleCalendar">Google Calendar</button></div></section>':kind==='budget'?budgetSummary():kind==='expense'?("<section class=\"hero\"><small>"+t("Gastos registrados en "))+dateLabel(dateKey(),{month:'long'})+'</small><h2>'+money(total)+'</h2></section>':'')+
     '<section class="panel"><div class="top"><h2>'+(kind==='event'?dateLabel(pickedDay,{weekday:'long',day:'numeric',month:'long'}):t('Registros'))+'</h2></div>'+
     ("<div class=\"filters\"><input id=\"search\" type=\"search\" aria-label=\""+t("Buscar")+"\" placeholder=\""+t("Buscar…")+"\" value=\"")+escape(filter)+'">'+
     (['task','shopping','pet','deadline'].includes(kind)?("<select id=\"status\" aria-label=\""+t("Estado")+"\">")+opts([['all',t('Todos')],['open',t('Pendientes')],['done',t('Completados')]],status)+'</select>':'')+
@@ -919,6 +928,19 @@ document.addEventListener('click',event=>{
   if(d.edit) {const entry=entries.find(i=>i.id===d.edit);if(entry) openEditor(entry.kind,entry);}
   if(d.day) {pickedDay=d.day; calendarMonth=fromKey(pickedDay);render();}
   if(d.month) {calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+Number(d.month),1,12);pickedDay=dateKey(calendarMonth);render();}
+  if(d.act==='calendarFeed') void run(button,async()=>{
+    const filterFeed=()=>db.from('casa_calendar_feeds').select('token').eq('household_id',household.id).eq('user_id',session.user.id);
+    const feed=await result(filterFeed().maybeSingle());
+    showFeed(feed?.token);
+  });
+  if(d.act==='createCalendarFeed') void run(button,async()=>{
+    const feed=await result(db.from('casa_calendar_feeds').insert({household_id:household.id,user_id:session.user.id}).select('token').single());
+    showFeed(feed.token);
+  });
+  if(d.act==='revokeCalendarFeed') void run(button,async()=>{
+    await result(db.from('casa_calendar_feeds').delete().eq('household_id',household.id).eq('user_id',session.user.id));
+    showFeed();
+  });
   if(d.act==='googleCalendar') void run(button,async()=>{
     const {data:{session:current}}=await db.auth.getSession();
     const expected=sessionStorage.getItem('casa-calendar-user');

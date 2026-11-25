@@ -1,4 +1,11 @@
 const portuguese = {
+  "Suscribir mi calendario":"Assinar meu calendário",
+  "Este enlace da acceso al título, fecha y hora de los eventos del hogar. Compártelo solo con tu servicio de calendario.":"Este link dá acesso ao título, data e horário dos eventos da família. Compartilhe apenas com seu serviço de calendário.",
+  "En Google Calendar web, añade otro calendario desde una URL. En Samsung, sincroniza esa misma cuenta Google.":"No Google Calendar pela web, adicione outro calendário por URL. No Samsung, sincronize a mesma conta Google.",
+  "Enlace privado":"Link privado",
+  "Revocar enlace":"Revogar link",
+  "Generar enlace privado":"Gerar link privado",
+  "Cerrar":"Fechar",
   "Vuelve a entrar con la cuenta de tu hogar para importar eventos.":"Entre novamente com a conta da sua família para importar eventos.",
   "No se pudo leer Google Calendar. Revisa el permiso y la API de Calendar.":"Não foi possível ler o Google Calendar. Confira a permissão e a API do Calendar.",
   "Marca los eventos que quieres compartir con tu hogar.":"Selecione os eventos que deseja compartilhar com sua família.",
