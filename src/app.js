@@ -1,3 +1,4 @@
+import { prepareAttachment, isPacked, unpackAttachment } from './file-compression.js';
 import { connectCalendar, readGoogleEvents } from './google-calendar.js';
 import { readCalendar, writeCalendar } from './calendar-files.js';
 import { shiftDate, ingredients, recipeAction, splitCents, expenseFields } from './planning.js';
@@ -774,11 +775,11 @@ async function submit(form) {
   const file=form.querySelector('input[type=file]')?.files[0];
   let attachment;
   if (file) {
-    if(file.size>20971520) throw new Error('El archivo supera el límite de 20 MB.');
-    const extension=file.name.split('.').at(-1).replace(/[^a-z0-9]/gi,'').slice(0,10);
-    const path=household.id+'/'+session.user.id+'/'+crypto.randomUUID()+(extension?'.'+extension:'');
-    attachment={bucket:fileKinds[kind].bucket,path,blob:file};
-    Object.assign(payload,{attachment_path:path,attachment_name:file.name});
+    const prepared=await prepareAttachment(file,kind);
+    if(prepared.blob.size>20971520) throw new Error('El archivo supera el límite de 20 MB.');
+    const path=household.id+'/'+session.user.id+'/'+crypto.randomUUID()+prepared.suffix;
+    attachment={bucket:fileKinds[kind].bucket,path,blob:prepared.blob};
+    Object.assign(payload,{attachment_path:path,attachment_name:prepared.name});
   }
   await saveLocal('casa_entries',id?'update':'insert',recordId,id?payload:{...payload,kind},attachment);
   if (form.dataset.kind==='event' && payload.entry_date) {
@@ -1065,16 +1066,20 @@ document.addEventListener('click',event=>{
   if(d.file) void run(button,async()=>{
     const item=entries.find(i=>i.id===d.file);
     if (!item) return;
-    const local=await localFile(session.user.id,household.id,item.attachment_path);
-    if (local) {
+    const path=item.attachment_path;
+    const owner=session.user.id,home=household.id;
+    const local=await localFile(owner,home,path);
+    if (local||isPacked(path)) {
+      const stored=local??await result(db.storage.from(fileKinds[item.kind].bucket).download(path));
+      const blob=await unpackAttachment(stored,path);
+      if(!local) await putFile(owner,home,path,stored).catch(()=>{});
       const link=document.createElement('a');
-      const objectUrl=URL.createObjectURL(local);
+      const objectUrl=URL.createObjectURL(blob);
       link.href=objectUrl;link.download=item.attachment_name;link.click();
       setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);
       return;
     }
     const params=item.kind!=='photo'?{download:item.attachment_name}:{};
-    const owner=session.user.id,home=household.id;
     const {signedUrl}=await result(db.storage.from(fileKinds[item.kind].bucket).createSignedUrl(item.attachment_path,60,params));
     void fetch(signedUrl).then(response=>response.ok?response.blob():null)
       .then(blob=>blob&&putFile(owner,home,item.attachment_path,blob)).catch(()=>{});
