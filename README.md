@@ -33,3 +33,9 @@ Para habilitar el envío, guarda en los secretos de Edge Functions el JSON de un
 ## Kanban y listas reutilizables
 
 En **Explorar → Kanban**, crea tableros y organiza sus tarjetas por estado. Cada tarjeta admite responsable, fecha de entrega y detalles. Puedes moverla con el selector de estado o arrastrarla en computadora. En **Listas → Listas reutilizables**, crea plantillas de compras o tareas y cópialas a una lista nueva. Cada copia comienza pendiente y se puede modificar independientemente.
+
+## Guardado local y sincronización
+
+Abre Casa al Día con conexión al menos una vez para guardar la pantalla de la app y los datos del hogar en el navegador. Los cambios en registros, listas, rutinas y Kanban se escriben primero en IndexedDB. Los adjuntos guardados o abiertos en este navegador y los borradores de los formularios del editor también quedan en el dispositivo. Al abrir la app o recuperar conexión, se reintenta la cola. El servidor procesa cada cambio una sola vez aunque el cliente repita la solicitud. Los errores de sincronización mantienen el cambio pendiente para que pueda reintentarse.
+
+Entrar por primera vez, unirse a un hogar, generar invitaciones, administrar miembros y abrir archivos que solo están en la nube requieren conexión. Las ediciones concurrentes del mismo campo se resuelven según el orden de aplicación en Supabase. El almacenamiento local es por navegador y cuenta. Si borras los datos del sitio, los cambios que aún no se sincronizaron pueden perderse.

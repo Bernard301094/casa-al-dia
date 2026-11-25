@@ -1,4 +1,11 @@
 const portuguese = {
+  "No hay espacio suficiente en el dispositivo.":"Não há espaço suficiente no dispositivo.",
+  "Hay cambios guardados en el celular que no se pudieron subir.":"Há alterações salvas no celular que não puderam ser enviadas.",
+  "Reintentar":"Tentar novamente",
+  "{count} cambio pendiente de sincronizar":"{count} alteração aguardando sincronização",
+  "{count} cambios pendientes de sincronizar":"{count} alterações aguardando sincronização",
+  "Sin conexión · datos guardados en este dispositivo":"Sem conexão · dados salvos neste dispositivo",
+  "Para completar esta acción necesitas conexión.":"Você precisa de conexão para concluir esta ação.",
   "Se canceló el acceso con Google.":"O login com o Google foi cancelado.",
   "No se pudo completar el acceso. Inténtalo de nuevo.":"Não foi possível entrar. Tente novamente.",
   "No se pudo verificar el acceso con Google.":"Não foi possível verificar o login com o Google.",

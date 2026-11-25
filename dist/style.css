@@ -289,3 +289,6 @@ select option { background:var(--surface); color:var(--text); }
 }
 .google-button { background:var(--surface); border-color:var(--line); min-height:48px; }
 .google-button img { width:19px;height:19px; flex:none; }
+
+.sync-status { display:flex; align-items:center; justify-content:space-between; gap:.7rem; flex-wrap:wrap; color:var(--accent-text); background:var(--accent-soft); border-radius:12px; padding:.55rem .8rem; font-size:.9rem; }
+.sync-status:empty { display:none; }

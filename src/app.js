@@ -1,3 +1,4 @@
+import { enqueue, readHome, putHome, getHomes, keepLocalHomes, createLocalHome, replay, queueStatus, getDraft, putDraft, localFile, putFile } from './offline.js';
 import { boardsView, listTemplatesView, organizeEditor } from './organize.js';
 import { pushConfigured, pushEnabled, enablePush, disablePush, listenForPush } from './push.js';
 import { occurrence, routinePanel, routineEditor } from './routines.js';
@@ -12,7 +13,11 @@ import { moduleDetails, fileKinds, nextBirthday, daysUntil, monthKey, memberLoca
 const returnUrl = new URL(location.href);
 const fragment = new URLSearchParams(returnUrl.hash.slice(1));
 const oauthError = returnUrl.searchParams.get('error') ?? fragment.get('error');
-const db = createClient(url, key);
+const db = createClient(url, key, {global:{fetch:(input,init={})=>{
+  const path=typeof input==='string'?input:input.url;
+  const timeout=AbortSignal.timeout(path?.includes('/storage/v1/object/')?120000:12000);
+  return fetch(input,{...init,signal:init.signal?AbortSignal.any([init.signal,timeout]):timeout});
+}}});
 const app = document.querySelector('#app');
 const editor = document.querySelector('#editor');
 let modules, descriptions;
@@ -53,6 +58,10 @@ const activeBoard = () => boards.find(board=>board.id===chosenBoard)??boards[0];
 let routines = [], routineDays = [];
 let view = 'today', filter = '', status = 'all', mode = 'login', notice = oauthError ? t(oauthError==='access_denied'
   ? 'Se canceló el acceso con Google.' : 'No se pudo completar el acceso. Inténtalo de nuevo.') : '';
+let syncTask;
+let syncStatus={count:0,failed:false};
+let localOnly=false;
+const lastSessionKey='casa-last-confirmed-user';
 let busy = false, generation = 0, refreshVersion = 0;
 const dateKey = (d = new Date()) => [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
 const fromKey = key => new Date(key + 'T12:00:00');
@@ -145,6 +154,7 @@ function render() {
     '<button class="side-footer" data-act="logout">'+icon('signout')+(t("Cerrar sesión")+"</button></aside><main class=\"content\"><header class=\"page-head\"><div><div class=\"workspace-label\">")+escape(household?.name ?? 'Casa al Día')+'</div><h1>'+top+'</h1></div><div class="actions">'+add+themeControl()+'</div>'+languageControl()+'</header>'+
     '<p id="notice" class="notice" role="status">'+escape(notice)+'</p>'+
     (invite && view!== 'family' && household?("<button data-view=\"family\">"+t("Tienes una invitación pendiente")+"</button>"):'')+
+    '<section id="sync-status" class="sync-status" aria-live="polite">'+syncMarkup()+'</section>'+
     '<div id="routine-notice" class="notice" role="status">'+reminderText()+'</div>'+
     (!household || view==='family'?family():view==='today'?dashboard():view==='more'?more():view==='lists'?listHub():view==='activity'?activityPanel():view==='routine'?routinePanel({date:routineDate,routines,occurrences:routinesOn(routineDate),members,escape,options:opts}):view==='location'?locations():view==='board'?boardsView({boards,board:activeBoard(),cards:boardCards,members,escape,options:opts,dateLabel}):listing(view))+
     '</main>'+(household?navigation(['today','event','lists','message','more'],'bottom'):'')+'</div>';
@@ -325,53 +335,159 @@ function openEditor(kind, entry) {
     (fileKinds[kind]&&!entry?'<label>'+t('Selecciona un archivo de hasta 20 MB')+'<input type="file" name="attachment" accept="'+fileKinds[kind].accept+'" required></label>':'')+
     '<p id="form-error" role="alert" class="notice"></p><div class="actions"><button class="primary">'+(kind==='message'&&!entry?t('Enviar'):t('Guardar'))+("</button><button type=\"button\" data-act=\"close\">"+t("Cancelar")+"</button>")+
     (entry?'<button type="button" class="danger" data-archive="'+entry.id+'">'+t('Archivar')+'</button>':'')+'</div></form>';
-  editor.showModal(); animateEntry(editor,14);
+  void showEditor();
 }
-async function refresh() {
-  if (!household) return;
-  const id=household.id, version=++refreshVersion;
-  const entryRequest = async () => {
-    const all = [];
-    for (let offset=0;;offset+=500) {
-      const batch = await result(db.from('casa_entries').select('*').eq('household_id',id).eq('archived',false)
-        .order('created_at',{ascending:false}).order('id').range(offset,offset+499));
-      all.push(...batch);
-      if (batch.length<500) return all;
-    }
-  };
-  const [items, people, templates, exceptions, changes, nextBoards, nextCards, nextLists] = await Promise.all([
-    entryRequest(),result(db.from('casa_members').select('*').eq('household_id',id).order('name')),
-    result(db.from('casa_routines').select('*').eq('household_id',id).eq('archived',false).order('starts_on').order('id')),
-    result(db.from('casa_routine_days').select('*').eq('household_id',id).in('day',[...new Set([routineDate,dateKey(),tomorrowKey()])])),
-    result(db.from('casa_activity').select('*').eq('household_id',id).order('created_at',{ascending:false}).limit(75)),
-    result(db.from('casa_boards').select('*').eq('household_id',id).eq('archived',false).order('title').order('id')),
-    result(db.from('casa_board_cards').select('*').eq('household_id',id).eq('archived',false).order('created_at').order('id')),
-    result(db.from('casa_list_templates').select('*').eq('household_id',id).eq('archived',false).order('title').order('id')),
-  ]);
-  if (household?.id!==id||version!==refreshVersion) return;
-  if (!people.some(m=>m.user_id===session?.user.id)) { await loadHomes(); return; }
-  entries=items; members=people; activity=changes; routines=templates; routineDays=exceptions; boards=nextBoards; boardCards=nextCards; listTemplates=nextLists;
+function syncMarkup() {
+  if (syncStatus.failed) return '<span>'+t('Hay cambios guardados en el celular que no se pudieron subir.')+'</span><button data-act="syncNow">'+t('Reintentar')+'</button>';
+  if (syncStatus.count) return '<span>'+plural(syncStatus.count,'{count} cambio pendiente de sincronizar','{count} cambios pendientes de sincronizar')+'</span>';
+  return localOnly || !navigator.onLine ? '<span>'+t('Sin conexión · datos guardados en este dispositivo')+'</span>' : '';
+}
+async function updateSyncStatus(user) {
+  const status=await queueStatus(user);
+  if (session?.user.id!==user) return;
+  syncStatus=status;
+  const target=document.querySelector('#sync-status');
+  if (target) target.innerHTML=syncMarkup();
+}
+function showSnapshot(data) {
+  ({entries,members,activity,routines,days:routineDays,boards,cards:boardCards,lists:listTemplates}=data);
   const focused=document.activeElement;
   if (focused?.id==='search' && document.querySelector('#results')) document.querySelector('#results').innerHTML=results(view);
   else if (!editor.open && !busy && !app.querySelector('form:focus-within')) render();
 }
-async function loadHomes(preferred) {
-  const ticket=++generation;
-  const data=await result(db.from('casa_households').select('id,name').order('name'));
-  if(ticket!==generation||!session) return;
-  homes=data;
-  const saved=localStorage.getItem('casa-home-'+session.user.id);
-  await selectHouse(homes.find(h=>h.id===(preferred??saved))??homes[0]);
+async function refresh({local=false}={}) {
+  if (!household || !session) return;
+  const id=household.id,user=session.user.id,version=++refreshVersion;
+  const current=()=>household?.id===id && session?.user.id===user && version===refreshVersion;
+  const initial=await readHome(user,id);
+  if (!current()) return;
+  if (initial.members.length || local) showSnapshot(initial);
+  if (local || !navigator.onLine || syncTask) return;
+  const table=(name)=>db.from(name).select('*').eq('household_id',id);
+  async function readAll(query) {
+    const all=[];
+    for (let offset=0;;offset+=500) {
+      const batch=await result(query.range(offset,offset+499));
+      all.push(...batch);
+      if(batch.length<500) return all;
+    }
+  }
+  try {
+    const [entries,members,routines,days,activity,boards,cards,lists]=await Promise.all([
+      readAll(table('casa_entries').eq('archived',false).order('created_at',{ascending:false}).order('id')),
+      result(table('casa_members').order('name')),
+      readAll(table('casa_routines').eq('archived',false).order('starts_on').order('id')),
+      readAll(table('casa_routine_days').order('day').order('routine_id')),
+      result(table('casa_activity').order('created_at',{ascending:false}).limit(75)),
+      readAll(table('casa_boards').eq('archived',false).order('title').order('id')),
+      readAll(table('casa_board_cards').eq('archived',false).order('created_at').order('id')),
+      readAll(table('casa_list_templates').eq('archived',false).order('title').order('id')),
+    ]);
+    if (!current()) return;
+    if (!members.some(m=>m.user_id===user)) {
+      const cloudHomes=await result(db.from('casa_households').select('id,name').order('name'));
+      const pending=await keepLocalHomes(user,cloudHomes);
+      if (!pending.some(home=>home.id===id) && current()) await loadHomes();
+      return;
+    }
+    localOnly=false;
+    await putHome(user,id,{entries,members,routines,days,activity,boards,cards,lists});
+    const data=await readHome(user,id);
+    if(current()) showSnapshot(data);
+  } catch(error) {
+    if (!current()) return;
+    if (!initial.members.length) throw error;
+    localOnly=true;
+    await updateSyncStatus(user);
+  }
 }
-async function selectHouse(next) {
+async function loadHomes(preferred,{cachedFirst=false}={}) {
+  const ticket=++generation;
+  const user=session?.user.id;
+  if (!user) return;
+  let data=await getHomes(user);
+  if(ticket!==generation||session?.user.id!==user) return;
+  const saved=localStorage.getItem('casa-home-'+user);
+  if (cachedFirst && data?.length) {
+    homes=data;
+    await selectHouse(homes.find(h=>h.id===saved)??homes[0],{local:true});
+    await updateSyncStatus(user);
+  }
+  if (navigator.onLine) {
+    try {
+      data=await result(db.from('casa_households').select('id,name').order('name'));
+      data=await keepLocalHomes(user,data);
+      localStorage.setItem(lastSessionKey,user);
+      localOnly=false;
+    } catch(error) {
+      if (!data) throw error;
+      localOnly=true;
+    }
+  } else localOnly=true;
+  if(ticket!==generation||session?.user.id!==user) return;
+  homes=data??[];
+  const next=homes.find(h=>h.id===(preferred??saved))??homes[0];
+  if (!cachedFirst || next?.id!==household?.id || (navigator.onLine && !localOnly)) await selectHouse(next);
+  else render();
+  await updateSyncStatus(user);
+}
+async function synchronize() {
+  if (syncTask || !navigator.onLine || !session) return;
+  const user=session.user.id;
+  if (!(await queueStatus(user)).count || syncTask || session?.user.id!==user) return;
+  ++refreshVersion;
+  syncTask=replay(user,db);
+  try { await syncTask; }
+  finally { syncTask=undefined; }
+  if (session?.user.id===user) {
+    await updateSyncStatus(user);
+    if (household && !subscription && navigator.onLine) await selectHouse(household);
+    else if (household) await refresh();
+  }
+}
+function syncSoon() { void synchronize().catch(showError); }
+function draftScope(form) {
+  if (!household || !form || ['auth','house','join'].includes(form.dataset.form)) return '';
+  return [household.id,form.dataset.form,form.dataset.type,form.dataset.kind,form.dataset.id,form.dataset.board].join(':');
+}
+async function showEditor() {
+  const form=editor.querySelector('form');
+  const scope=draftScope(form),user=session?.user.id;
+  editor.showModal(); animateEntry(editor,14);
+  if (!scope || !user) return;
+  try {
+    const draft=await getDraft(user,scope);
+    if (!draft || !editor.open || !form.isConnected || form.dataset.dirty) return;
+    for (const [name,value] of Object.entries(draft.values)) {
+      const field=form.elements.namedItem(name);
+      if (!field) continue;
+      if (field.type==='file' && value instanceof File) {
+        const data=new DataTransfer();
+        data.items.add(value);
+        field.files=data.files;
+      } else if (field.type!=='file') field.value=value;
+    }
+  } catch(error) { showError(error); }
+}
+async function saveLocal(entity,action,recordId,payload,file) {
+  const user=session.user.id,home=household.id;
+  const scope=editor.open ? draftScope(editor.querySelector('form')) : '';
+  await enqueue({user,home,entity,action,recordId,payload,file,scope});
+  await refresh({local:true});
+  await updateSyncStatus(user);
+  setTimeout(syncSoon,0);
+  if (navigator.storage?.persist) void navigator.storage.persist().catch(()=>{});
+  return recordId;
+}
+async function selectHouse(next,{local=false}={}) {
   const previous=subscription;
   subscription=undefined;
   household=next; currentInviteLink=''; entries=[]; members=[]; routines=[]; routineDays=[]; routineDate=dateKey(); boards=[]; boardCards=[]; listTemplates=[]; chosenBoard=undefined; notice='';
   if (previous) await db.removeChannel(previous);
   if (!next || household?.id!==next.id || !session) { render(); return; }
   localStorage.setItem('casa-home-'+session.user.id,next.id);
-  await refresh();
-  if (household?.id!==next.id || !members.length) return;
+  await refresh({local});
+  if (household?.id!==next.id || !members.length || !navigator.onLine || local) return;
   const config = table=>({event:'*',schema:'public',table,filter:'household_id=eq.'+next.id});
   subscription=db.channel('casa-'+next.id)
     .on('postgres_changes',config('casa_entries'),()=>refresh().catch(e=>show(errorText(e))))
@@ -387,9 +503,9 @@ async function handleSession(next) {
   const changed=session?.user.id!==next?.user.id;
   session=next;
   if (mode==='reset') {render(); return;}
-  if (changed && next) {view='today'; await loadHomes(); void listenForPush(next.user.id,show).catch(()=>{});}
+  if (changed && next) {view='today'; await loadHomes(undefined,{cachedFirst:true}); void listenForPush(next.user.id,show).catch(()=>{});syncSoon();}
   if (!next) {
-    ++generation; household=undefined; entries=[]; members=[]; homes=[]; routines=[]; routineDays=[]; boards=[]; boardCards=[]; listTemplates=[]; chosenBoard=undefined;
+    ++generation; syncStatus={count:0,failed:false}; household=undefined; entries=[]; members=[]; homes=[]; routines=[]; routineDays=[]; boards=[]; boardCards=[]; listTemplates=[]; chosenBoard=undefined;
     if(subscription) {const old=subscription; subscription=undefined; await db.removeChannel(old);}
   }
   render();
@@ -406,19 +522,19 @@ async function submit(form) {
       throw new Error('Selecciona dos responsables distintos para alternar.');
     }
     if (values.reminder_minutes && !values.due_time) throw new Error('Indica una hora para el recordatorio.');
-    await result(db.from('casa_routines').insert({
-      household_id:household.id,title:values.title.trim(),starts_on:values.starts_on,
+    await saveLocal('casa_routines','insert',crypto.randomUUID(),{
+      title:values.title.trim(),starts_on:values.starts_on,
       every_days:Number(values.every_days),first_member:values.first_member||null,second_member:values.second_member||null,
       due_time:values.due_time||null,reminder_minutes:values.reminder_minutes===''?null:Number(values.reminder_minutes),
-    }));
+    });
     routineDate=values.starts_on;
-    editor.close(); await refresh(); go('routine'); show(t('Guardado.')); return;
+    editor.close(); go('routine'); show(t('Guardado.')); return;
   }
   if (type==='routineDay') {
-    await result(db.rpc('casa_set_routine_day',{
-      h:household.id,r:form.dataset.id,target_day:routineDate,next_status:values.status,next_assignee:values.assignee||null,
-    }));
-    await refresh(); render(); show(t('Guardado.')); return;
+    await saveLocal('casa_routine_days','routineDay',form.dataset.id,{
+      day:routineDate,status:values.status,assignee:values.assignee||null,
+    });
+     render(); show(t('Guardado.')); return;
   }
   if (type==='auth') {
     const {email,password}=values;
@@ -435,9 +551,18 @@ async function submit(form) {
     }
     return;
   }
-  if (type==='house'||type==='join') {
-    const id=await result(db.rpc(type==='house'?'casa_create_household':'casa_join_household',values));
-    if (type==='join') sessionStorage.removeItem(inviteStorage);
+  if (type==='house') {
+    const houseName=values.house_name.trim(),memberName=values.member_name.trim();
+    if (!houseName || !memberName) throw new Error('Escribe un nombre.');
+    const localHome=await createLocalHome(session.user.id,houseName,memberName);
+    homes=[...homes,localHome];
+    await selectHouse(localHome,{local:true}); go('today'); await updateSyncStatus(session.user.id); syncSoon();
+    return;
+  }
+  if (type==='join') {
+    if (!navigator.onLine) return show(t('Para completar esta acción necesitas conexión.'));
+    const id=await result(db.rpc('casa_join_household',values));
+    sessionStorage.removeItem(inviteStorage);
     await loadHomes(id); go('today'); return;
   }
   const payload={
@@ -445,30 +570,25 @@ async function submit(form) {
     entry_date:values.entry_date||null, entry_time:values.entry_time||null, amount:values.amount||null, assignee:values.assignee||null,
   };
   const id = form.dataset.id;
-  if (id) await result(db.from('casa_entries').update(payload).eq('id',id).eq('household_id',household.id).select('id').single());
+  if (id) await saveLocal('casa_entries','update',id,payload);
   else {
     const kind=form.dataset.kind;
     const file=form.querySelector('input[type=file]')?.files[0];
-    let stored;
+    const recordId=crypto.randomUUID();
+    let attachment;
     if (file) {
       if (file.size>20971520) throw new Error('El archivo supera el límite de 20 MB.');
       const extension=file.name.split('.').at(-1).replace(/[^a-z0-9]/gi,'').slice(0,10);
-      const path=household.id+'/'+session.user.id+'/'+crypto.randomUUID()+(extension?'.'+extension:'');
-      stored=db.storage.from(fileKinds[kind].bucket);
-      await result(stored.upload(path,file));
+      const path=household.id+'/'+session.user.id+'/'+recordId+(extension?'.'+extension:'');
+      attachment={bucket:fileKinds[kind].bucket,path,blob:file};
       Object.assign(payload,{attachment_path:path,attachment_name:file.name});
     }
-    try {
-      await result(db.from('casa_entries').insert({...payload,household_id:household.id,kind}).select('id').single());
-    } catch(error) {
-      if(stored) await stored.remove([payload.attachment_path]);
-      throw error;
-    }
+    await saveLocal('casa_entries','insert',recordId,{...payload,kind},attachment);
   }
   if (form.dataset.kind==='event' && payload.entry_date) {
     pickedDay=payload.entry_date; calendarMonth=fromKey(pickedDay);
   }
-  editor.close(); await refresh(); render(); show(t('Guardado.'));
+  editor.close(); render(); show(t('Guardado.'));
 }
 async function saveOrganization(form,values) {
   const {type,id}=form.dataset;
@@ -477,8 +597,13 @@ async function saveOrganization(form,values) {
   if (type==='apply') {
     const template=listTemplates.find(item=>item.id===id);
     if (!template) throw new Error('La plantilla ya no está disponible.');
-    await result(db.rpc('casa_copy_list_template',{h:household.id,template_id:id,list_name:title}));
-    editor.close(); await refresh(); go(template.kind); filter=title; render(); show(t('Lista creada.'));
+    if (entries.some(item=>item.kind===template.kind && item.category.toLocaleLowerCase()===title.toLocaleLowerCase())) {
+      throw new Error('List name already in use');
+    }
+    await saveLocal('casa_entries','batch',crypto.randomUUID(),{
+      kind:template.kind,category:title,items:template.items.map(title=>({id:crypto.randomUUID(),title})),
+    });
+    editor.close(); go(template.kind); filter=title; render(); show(t('Lista creada.'));
     return;
   }
   let record={title};
@@ -492,19 +617,17 @@ async function saveOrganization(form,values) {
     }
     record={...record,kind:values.kind,items};
   }
-  const table=db.from(organizationTables[type]);
-  const base={household_id:household.id,...(type==='card'?{board_id:form.dataset.board}:{})};
-  const saved=await result((id?table.update(record).eq('id',id).eq('household_id',household.id):
-    table.insert({...base,...record})).select('id').single());
-  if (type==='board') chosenBoard=saved.id;
-  editor.close(); await refresh(); render(); show(t('Guardado.'));
+  const recordId=id||crypto.randomUUID();
+  if(type==='card'&&!id) record.board_id=form.dataset.board;
+  await saveLocal(organizationTables[type],id?'update':'insert',recordId,record);
+  if (type==='board') chosenBoard=recordId;
+  editor.close(); render(); show(t('Guardado.'));
 }
 async function moveCard(card,stage) {
   if (card.stage===stage) return;
   const patch={stage};
   if(card.assignee&&!members.some(item=>item.user_id===card.assignee)) patch.assignee=null;
-  await result(db.from('casa_board_cards').update(patch).eq('household_id',household.id).eq('id',card.id).select('id').single());
-  await refresh();render();show(t('Tarjeta movida.'));
+  await saveLocal('casa_board_cards','update',card.id,patch);render();show(t('Tarjeta movida.'));
   document.querySelector('[data-card-stage="'+card.id+'"]')?.focus();
 }
 
@@ -532,6 +655,12 @@ document.addEventListener('drop',event=>{
 });
 document.addEventListener('dragend',()=>{draggedCard=undefined;});
 function showError(error) {
+  if (error?.name==='QuotaExceededError') {
+    const message=t('No hay espacio suficiente en el dispositivo.');
+    const target=editor.open&&editor.querySelector('#form-error');
+    if (target) target.textContent=message; else show(message);
+    return;
+  }
   const target=editor.open&&editor.querySelector('#form-error');
   if (target) target.textContent=errorText(error); else show(errorText(error));
 }
@@ -548,7 +677,17 @@ document.addEventListener('submit',event=>{
   event.preventDefault();
   void run(event.submitter,()=>submit(form));
 });
+function persistEditor(event) {
+  const form=event.target.closest('#editor form');
+  const scope=draftScope(form);
+  if (!scope || !session) return;
+  form.dataset.dirty='true';
+  const values=Object.fromEntries([...new FormData(form)].filter(([,value])=>!(value instanceof File)||value.name));
+  void putDraft(session.user.id,scope,values).catch(showError);
+}
+document.addEventListener('change',persistEditor);
 document.addEventListener('input',event=>{
+  persistEditor(event);
   if(event.target.id==='search') {filter=event.target.value; document.querySelector('#results').innerHTML=results(view);}
 });
 document.addEventListener('change',event=>{
@@ -599,9 +738,9 @@ document.addEventListener('change',event=>{
   if(el.dataset.check) {
     const checked=el.checked;
     void run(el,async()=>{
-      try {await result(db.from('casa_entries').update({done:checked}).eq('id',el.dataset.check).eq('household_id',household.id).select('id').single());}
+      try {await saveLocal('casa_entries','update',el.dataset.check,{done:checked});}
       catch(error) {el.checked=!checked; throw error;}
-      await refresh(); render();
+      render();
     });
   }
 });
@@ -622,47 +761,59 @@ document.addEventListener('click',event=>{
     const item=records[d.org]?.find(entry=>entry.id===d.id);
     if (!d.id || item) {
       editor.innerHTML=organizeEditor(d.org,item,{escape,options:opts,members,stage:d.stage,boardId:item?.board_id??activeBoard()?.id});
-      editor.showModal();animateEntry(editor,14);
+      void showEditor();
     }
   }
   if(d.orgArchive&&confirm(t('¿Archivar este registro?'))) void run(button,async()=>{
     const patch={archived:true};
     const card=d.orgArchive==='card'&&boardCards.find(item=>item.id===d.id);
     if (card?.assignee&&!members.some(item=>item.user_id===card.assignee)) patch.assignee=null;
-    await result(db.from(organizationTables[d.orgArchive]).update(patch).eq('household_id',household.id).eq('id',d.id).select('id').single());
-    editor.close();await refresh();render();
+    await saveLocal(organizationTables[d.orgArchive],'update',d.id,patch);
+    editor.close();render();
   });
   if(d.act==='newRoutine') {
     editor.innerHTML=routineEditor(routineDate,members,opts);
-    editor.showModal(); animateEntry(editor,14);
+    void showEditor();
   }
   if(d.routineArchive && confirm(t('¿Archivar esta rutina?'))) void run(button,async()=>{
-    await result(db.from('casa_routines').update({archived:true}).eq('household_id',household.id).eq('id',d.routineArchive).select('id').single());
-    await refresh(); render();
+    await saveLocal('casa_routines','update',d.routineArchive,{archived:true});
+    render();
   });
+  if(d.act==='syncNow') syncSoon();
   if(d.act==='close') editor.close();
   if(d.act==='google') void run(button,startGoogle);
 
   if(d.file) void run(button,async()=>{
     const item=entries.find(i=>i.id===d.file);
     if (!item) return;
+    const local=await localFile(session.user.id,household.id,item.attachment_path);
+    if (local) {
+      const link=document.createElement('a');
+      const objectUrl=URL.createObjectURL(local);
+      link.href=objectUrl;link.download=item.attachment_name;link.click();
+      setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);
+      return;
+    }
     const params=item.kind==='document'?{download:item.attachment_name}:{};
+    const owner=session.user.id,home=household.id;
     const {signedUrl}=await result(db.storage.from(fileKinds[item.kind].bucket).createSignedUrl(item.attachment_path,60,params));
+    void fetch(signedUrl).then(response=>response.ok?response.blob():null)
+      .then(blob=>blob&&putFile(owner,home,item.attachment_path,blob)).catch(()=>{});
     const link=document.createElement('a');
     link.href=signedUrl; link.target='_blank'; link.rel='noopener noreferrer'; link.click();
   });
   if(d.act==='shareLocation' && confirm(t('¿Compartir tu ubicación actual con los miembros de este hogar?'))) void run(button,async()=>{
     const coordinates=await memberLocation();
-    await result(db.from('casa_entries').insert({household_id:household.id,kind:'location',title:t('Ubicación compartida'),...coordinates}));
-    await refresh();render();
+    await saveLocal('casa_entries','insert',crypto.randomUUID(),{kind:'location',title:t('Ubicación compartida'),...coordinates});
+    render();
   });
   if(d.act==='removeLocation') void run(button,async()=>{
-    await result(db.rpc('casa_withdraw_location',{h:household.id}));
-    await refresh();render();
+    await saveLocal('casa_entries','withdrawLocation',crypto.randomUUID(),{});
+    render();
   });
   if(d.act==='enablePush') void run(button,async()=>{await enablePush(session.user.id,db,show);render();show(t('Dispositivo registrado para recibir avisos.'));});
   if(d.act==='disablePush') void run(button,async()=>{await disablePush(session.user.id,db);render();show(t('Avisos desactivados en este dispositivo.'));});
-  if(d.act==='logout') void run(button,async()=>{await disablePush(session.user.id,db);await result(db.auth.signOut());mode='login';notice='';await handleSession(null);});
+  if(d.act==='logout') void run(button,async()=>{await disablePush(session.user.id,db);await result(db.auth.signOut());localStorage.removeItem(lastSessionKey);mode='login';notice='';await handleSession(null);});
   if(d.act==='invite') void run(button,async()=>{
     const code=await result(db.rpc('casa_create_invite',{h:household.id}));
     const link=new URL(baseUrl());link.searchParams.set('invitar',code);
@@ -671,11 +822,16 @@ document.addEventListener('click',event=>{
   if(d.act==='copy') void run(button,async()=>{await navigator.clipboard.writeText(document.querySelector('#invite-link input').value);show(t('Enlace copiado.'));});
   if(d.remove&&confirm(t('¿Quitar a este miembro del hogar?'))) void run(button,async()=>{await result(db.rpc('casa_remove_member',{h:household.id,member_id:d.remove}));await refresh();render();});
   if(d.archive&&confirm(t('¿Archivar este registro?'))) void run(button,async()=>{
-    await result(db.from('casa_entries').update({archived:true}).eq('id',d.archive).eq('household_id',household.id).select('id').single());editor.close();await refresh();render();
+    await saveLocal('casa_entries','update',d.archive,{archived:true});editor.close();render();
   });
 });
-setInterval(updateRoutineNotice,30000);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&household) refresh().catch(showError);});
+setInterval(()=>{
+  updateRoutineNotice();
+  if (document.visibilityState==='visible') syncSoon();
+},30000);
+window.addEventListener('online',()=>{localOnly=false; syncSoon(); if(household) (subscription?refresh():selectHouse(household)).catch(showError);});
+window.addEventListener('offline',()=>{localOnly=true; if(session) void updateSyncStatus(session.user.id);});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&household) {syncSoon();refresh().catch(showError);}});
 app.textContent=t('Cargando Casa al Día…');
 db.auth.onAuthStateChange((event,current)=>{
   if (event==='PASSWORD_RECOVERY') mode='reset';
@@ -686,7 +842,9 @@ db.auth.onAuthStateChange((event,current)=>{
       if (new URLSearchParams(clean.hash.slice(1)).has('error')) clean.hash='';
       history.replaceState(null,'',clean);
     }
-    setTimeout(()=>{if(event==='SIGNED_IN'&&session?.user.id===current?.user.id)return;handleSession(current).catch(error=>{render();showError(error);});},0);
+    setTimeout(()=>{if(event==='SIGNED_IN'&&session?.user.id===current?.user.id)return;const cached=event==='INITIAL_SESSION' && !navigator.onLine && !current && localStorage.getItem(lastSessionKey);
+      if (event==='SIGNED_OUT') localStorage.removeItem(lastSessionKey);
+      handleSession(cached ? {user:{id:cached}} : current).catch(error=>{render();showError(error);});},0);
   }
 });
 
