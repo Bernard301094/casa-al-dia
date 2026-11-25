@@ -62,7 +62,7 @@ let routineDate = dateKey();
 let pickedDay = dateKey(), calendarMonth = fromKey(pickedDay);
 const money = value => new Intl.NumberFormat(locale(),{style:'currency',currency:'BRL'}).format(value);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const brand = '<div class="brand"><img src="casa-icon-192.png" alt=""> <span>Casa al Día</span></div>';
+const brand = '<div class="brand"><img src="casa-icon-192.png?v=9" alt=""> <span>Casa al Día</span></div>';
 function themeControl() {
   const dark=currentTheme()==='dark';
   return '<button type="button" class="icon-button" data-act="theme" aria-label="'+(dark?t('Usar tema claro'):t('Usar tema oscuro'))+'">'+icon(dark?'sun':'moon')+'</button>';
@@ -664,4 +664,4 @@ db.auth.onAuthStateChange((event,current)=>{
   }
 });
 
-if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('sw.js').catch(console.error);
+if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).catch(console.error);
