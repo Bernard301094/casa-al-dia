@@ -1,6 +1,6 @@
 importScripts('push-worker.js');
-const cacheName = 'casa-shell-v7';
-const assets = ['app.css','style.css','app.js','icon.svg','icon-192.png','icon-512.png','manifest.webmanifest'];
+const cacheName = 'casa-shell-v8';
+const assets = ['app.css','style.css','app.js','casa-icon-32.png','casa-icon-180.png','casa-icon-192.png','casa-icon-512.png','manifest.webmanifest'];
 self.addEventListener('install',event => {
   event.waitUntil(caches.open(cacheName).then(cache => cache.addAll(assets)).then(() => self.skipWaiting()));
 });
