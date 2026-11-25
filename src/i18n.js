@@ -1,4 +1,6 @@
 const portuguese = {
+  "Elegir fecha":"Escolher data",
+  "Quitar fecha":"Limpar data",
   "Abrir Casa al Día en el navegador":"Abrir Casa al Día no navegador",
   "Para entrar con Google, abre la app en una pestaña del navegador.":"Para entrar com o Google, abra o app em uma aba do navegador.",
   "No hay espacio suficiente en el dispositivo.":"Não há espaço suficiente no dispositivo.",

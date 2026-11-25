@@ -1,9 +1,9 @@
 importScripts('push-worker.js');
-const cacheName = 'casa-shell-v12';
+const cacheName = 'casa-shell-v13';
 const root = new URL(self.registration.scope);
 const scoped = path => new URL(path,root).href;
 const shell = scoped('index.html');
-const assets = ['app.css','style.css?v=12','app.js?v=12','firebase-config.js','casa-icon-32.png',
+const assets = ['app.css','style.css?v=13','app.js?v=13','firebase-config.js','casa-icon-32.png',
   'casa-icon-180.png','casa-icon-192.png?v=9','casa-icon-512.png','manifest.webmanifest'].map(scoped);
 
 self.addEventListener('install',event => {

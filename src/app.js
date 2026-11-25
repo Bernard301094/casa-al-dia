@@ -1,3 +1,4 @@
+import { syncDateFields } from './date-picker.js';
 import { enqueue, readHome, putHome, getHomes, keepLocalHomes, createLocalHome, replay, queueStatus, getDraft, putDraft, localFile, putFile } from './offline.js';
 import { boardsView, listTemplatesView, organizeEditor } from './organize.js';
 import { pushConfigured, pushEnabled, enablePush, disablePush, listenForPush } from './push.js';
@@ -475,6 +476,7 @@ async function showEditor() {
         field.files=data.files;
       } else if (field.type!=='file') field.value=value;
     }
+    syncDateFields(form);
   } catch(error) { showError(error); }
 }
 async function saveLocal(entity,action,recordId,payload,file) {
