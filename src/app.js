@@ -1,6 +1,7 @@
 import { prepareAttachment, isPacked, unpackAttachment } from './file-compression.js';
 import { connectCalendar, readGoogleEvents } from './google-calendar.js';
 import { readCalendar, writeCalendar } from './calendar-files.js';
+import { occursOn, eventTimes, eventConflicts, ingredientAmount, shoppingGroups, expenseBalance } from './workflows.js';
 import { shiftDate, ingredients, recipeAction, splitCents, expenseFields } from './planning.js';
 import { syncDateFields } from './date-picker.js';
 import { enqueue, enqueueMany, readHome, putHome, getHomes, keepLocalHomes, createLocalHome, replay, queueStatus, getDraft, putDraft, localFile, putFile } from './offline.js';
@@ -239,9 +240,16 @@ function reminderText() {
     const scheduled=new Date(item.day+'T'+item.due_time.slice(0,5));
     return now.getTime()>=scheduled.getTime()-item.reminder_minutes*60000;
   });
+  const dueEvents=active('event').filter(item=>item.entry_time&&item.flow?.reminder!=null&&
+    (!item.assignee||item.assignee===session.user.id)&&[today,tomorrowKey(now)].some(day=>{
+      if(!occursOn(item,day)) return false;
+      const {start,end}=eventTimes({...item,entry_date:day});
+      return +now>=+start-item.flow.reminder*60000&&now<end;
+    }));
   const deadlines=active('deadline').filter(item=>!item.done&&item.entry_date<=shiftDate(today,7)&&
     (!item.assignee||item.assignee===session.user.id));
   return [
+    dueEvents.length ? escape(t('Recordatorios de eventos'))+': '+dueEvents.slice(0,5).map(item=>escape(item.title)).join(' · ') : '',
     due.length ? escape(t('Recordatorio de rutinas'))+': '+due.map(item=>escape(item.title)).join(' · ') : '',
     deadlines.length ? escape(t('Vencimientos'))+': '+deadlines.slice(0,5).map(item=>escape(item.title)).join(' · ') : '',
   ].filter(Boolean).join('<br>');
@@ -322,11 +330,7 @@ function moduleOverview(kind) {
     (nextDate?'<span class="pill">'+t('Próxima fecha')+' · '+dateLabel(nextDate)+'</span>':'')+'</div></div></section>';
 }
 function sendToCalendar(entry) {
-  const allDay=!entry.entry_time;
-  const start=new Date(entry.entry_date+'T'+(entry.entry_time||'00:00'));
-  const end=new Date(start);
-  if(allDay) end.setDate(end.getDate()+1);
-  else end.setTime(start.getTime()+3600000);
+  const {allDay,start,end}=eventTimes(entry);
   if(!Number.isFinite(start.getTime())) return;
   android.addCalendarEvent(entry.title,entry.details||'',start.getTime(),end.getTime(),allDay,
     t('Elige dónde guardar el evento'),t('No hay un calendario compatible. Puedes exportar el archivo ICS.'));
@@ -370,11 +374,35 @@ function locations() {
         (i.author===session.user.id?("<button class=\"danger\" data-act=\"removeLocation\">"+t("Quitar")+"</button>"):'')+'</div>';
     }).join('')+'</div></section>';
 }
+function balances() {
+  const debts=expenseBalance(active('expense'));
+  const name=id=>members.find(member=>member.user_id===id)?.name??t('Miembro');
+  return '<section class="panel"><h2>'+t('Saldos pendientes')+'</h2>'+
+    (debts.length?debts.map(({debtor,creditor,cents})=>'<div class="row"><span class="grow">'+
+      escape(t('{debtor} le debe a {creditor}',{debtor:name(debtor),creditor:name(creditor)}))+'</span><strong>'+money(cents/100)+'</strong></div>').join(''):
+      '<p class="muted">'+t('No hay saldos compartidos pendientes.')+'</p>')+'</section>';
+}
+function budgetBreakdown(month) {
+  const expenses=active('expense');
+  const budgets=active('budget');
+  const previous=shiftDate(month+'-01',-1).slice(0,7);
+  const monthRows=rows=>rows.filter(row=>row.entry_date?.startsWith(month));
+  const current=monthRows(expenses), limits=monthRows(budgets);
+  const categories=[...new Set([...current,...limits].map(row=>row.category))];
+  const total=rows=>rows.reduce((sum,row)=>sum+Number(row.amount),0);
+  return '<section class="panel"><h2>'+t('Por categoría')+'</h2><p>'+t('Gastos del mes anterior')+' · '+
+    money(total(expenses.filter(row=>row.entry_date?.startsWith(previous))))+'</p>'+
+    categories.map(category=>{
+      const spent=total(current.filter(row=>row.category===category)), limit=total(limits.filter(row=>row.category===category));
+      return '<div class="row"><strong class="grow">'+escape(category||t('General'))+'</strong><span>'+money(spent)+' / '+money(limit)+'</span>'+
+        (limit>0&&spent>=limit*.85?'<span class="pill">'+t(spent>=limit?'Límite alcanzado':'Cerca del límite')+'</span>':'')+'</div>';
+    }).join('')+'</section>';
+}
 function budgetSummary() {
   const month=monthKey(dateKey());
   const spent=active('expense').filter(i=>monthKey(i.entry_date)===month).reduce((sum,i)=>sum+Number(i.amount),0);
   const budget=active('budget').filter(i=>monthKey(i.entry_date)===month).reduce((sum,i)=>sum+Number(i.amount),0);
-  return '<section class="hero"><small>'+dateLabel(dateKey(),{month:'long',year:'numeric'})+'</small><h2>'+money(spent)+(t(" gastados")+"</h2><p>")+money(budget)+t(' de presupuesto · ')+money(budget-spent)+(t(" disponibles")+"</p><button data-view=\"expense\">"+t("Ver gastos")+"</button></section>");
+  return '<section class="hero"><small>'+dateLabel(dateKey(),{month:'long',year:'numeric'})+'</small><h2>'+money(spent)+(t(" gastados")+"</h2><p>")+money(budget)+t(' de presupuesto · ')+money(budget-spent)+(t(" disponibles")+"</p><button data-view=\"expense\">"+t("Ver gastos")+"</button></section>")+budgetBreakdown(month)+balances();
 }
 function byDate(a,b) { return ((a.entry_date??'9999')+(a.entry_time??'')).localeCompare((b.entry_date??'9999')+(b.entry_time??'')); }
 const agendaKinds=['event','task','routine','schedule','meal','birthday','deadline'];
@@ -382,7 +410,9 @@ function agendaItems(day) {
   const q=filter.trim().toLocaleLowerCase(locale());
   return [
     ...entries.filter(item=>agendaKinds.includes(item.kind)&&!item.archived&&
-      (item.kind==='birthday' ? nextBirthday(item.entry_date,day)===day : item.entry_date===day)),
+      (item.kind==='birthday' ? nextBirthday(item.entry_date,day)===day :
+        item.kind==='event' ? occursOn(item,day) : item.entry_date===day))
+      .map(item=>item.kind==='event'?{...item,entry_date:day}:item),
     ...routinesOn(day).filter(item=>item.status!=='skipped').map(item=>({...item,kind:'routine',entry_time:item.due_time})),
   ].filter(item=>(agendaKind==='all'||item.kind===agendaKind) && (agendaPerson==='all'||item.assignee===agendaPerson) &&
     (!q||[item.title,item.details].some(text=>text?.toLocaleLowerCase(locale()).includes(q))))
@@ -391,10 +421,12 @@ function agendaItems(day) {
 function agendaRows() {
   return Array.from({length:agendaWeek?7:1},(_,i)=>{
     const day=shiftDate(pickedDay,i), data=agendaItems(day);
+    const conflicts=eventConflicts(data);
     return '<section class="agenda-day"><h3>'+dateLabel(day,{weekday:'long',day:'numeric',month:'long'})+'</h3>'+
       (data.length?data.map(item=>'<div class="row"><small>'+modules[item.kind][0]+'</small><strong class="grow">'+escape(item.title)+'</strong>'+
         '<span>'+escape(item.entry_time?.slice(0,5))+'</span>'+
-        (deviceCalendar&&item.kind==='event'?'<button data-device-event="'+item.id+'">'+icon('event')+t('Guardar en mi calendario')+'</button>':'')+
+        (conflicts.has(item.id)?'<span class="pill">'+t('Se cruza con otro evento')+'</span>':'')+
+        (deviceCalendar&&item.kind==='event'?'<button data-device-event="'+item.id+'" data-device-date="'+day+'">'+icon('event')+t('Guardar en mi calendario')+'</button>':'')+
         (item.kind==='routine'?'<button data-view="routine">'+t('Ver rutinas')+'</button>':'<button data-edit="'+item.id+'">'+t('Editar')+'</button>')+'</div>').join(''):
         '<p class="muted">'+t('Aún no hay registros.')+'</p>')+'</section>';
   }).join('');
@@ -423,12 +455,38 @@ function filtered(kind) {
   const q = filter.trim().toLocaleLowerCase(locale());
   return active(kind).filter(i=>(view!=='event'||i.entry_date===pickedDay)&&(!q||[i.title,i.details,i.category].some(v=>v?.toLocaleLowerCase(locale()).includes(q)))&&(!categoryFilter||i.category===categoryFilter)&&(status==='all'||i.done===(status==='done')));
 }
+let menuOffset=0;
+function weeklyMenu() {
+  const today=dateKey();
+  const weekday=new Date(today+'T12:00').getDay();
+  const monday=shiftDate(today,menuOffset*7-(weekday+6)%7);
+  const last=shiftDate(monday,6);
+  return '<section class="panel"><div class="top"><h2>'+t('Menú semanal')+'</h2><div class="actions">'+
+    '<button data-menu-week="-1" aria-label="'+t('Semana anterior')+'">'+icon('left')+'</button>'+
+    '<button data-menu-week="1" aria-label="'+t('Semana siguiente')+'">'+icon('right')+'</button></div></div><p>'+dateLabel(monday)+' – '+dateLabel(last)+'</p>'+
+    Array.from({length:7},(_,index)=>{
+      const day=shiftDate(monday,index);
+      const meals=active('meal').filter(item=>item.entry_date===day);
+      return '<div class="row"><strong>'+dateLabel(day,{weekday:'long'})+'</strong><div class="grow">'+meals.map(item=>
+        '<div><button data-edit="'+item.id+'">'+escape(t(item.category)||t('Comida'))+' · '+escape(item.title)+'</button></div>').join('')+
+        '</div><button data-meal-date="'+day+'" aria-label="'+escape(t('Agregar comida'))+'">'+icon('plus')+'</button></div>';
+    }).join('')+'</section>';
+}
+function shoppingSummary() {
+  const groups=shoppingGroups(active('shopping'),locale()).filter(group=>group.ids.length>1);
+  if(!groups.length) return '';
+  const quantity=new Intl.NumberFormat(locale(),{maximumFractionDigits:2});
+  return '<section class="panel"><h2>'+t('Ingredientes consolidados')+'</h2>'+groups.map(group=>
+    '<div class="row"><strong class="grow">'+escape(group.title)+'</strong><span>'+escape(group.category)+'</span><span>'+
+    quantity.format(group.quantity)+' '+escape(group.unit)+'</span><button data-group-shopping="'+escape(group.ids.join(','))+'">'+t('Marcar comprados')+'</button></div>').join('')+'</section>';
+}
 function listing(kind) {
   const month = dateKey().slice(0,7);
   const categories=kind==='event'?[]:[...new Set(active(kind).map(item=>item.category).filter(Boolean))]
     .sort((a,b)=>a.localeCompare(b,locale()));
   const total = active('expense').filter(i=>i.entry_date.startsWith(month)).reduce((sum,i)=>sum+Number(i.amount),0);
-  return moduleOverview(kind)+
+  return moduleOverview(kind)+(kind==='expense'?balances():'')+(kind==='meal'?weeklyMenu():'')+
+    (kind==='shopping'?shoppingSummary():'')+
     (kind==='deadline'?'<section class="hero"><h2>'+t('Próximos 7 días y vencidos')+'</h2>'+
       '<p>'+active('deadline').filter(item=>!item.done&&item.entry_date<=shiftDate(dateKey(),7)).length+'</p></section>':'')+
     (kind==='event'?calendar()+'<section class="panel"><div class="filters"><label>'+t('Vista')+'<select id="agenda-mode">'+opts([['day',t('Día')],['week',t('Semana')]],agendaWeek?'week':'day')+'</select></label><label>'+t('Tipo')+'<select id="agenda-kind">'+opts([['all',t('Todos')],...agendaKinds.map(k=>[k,modules[k][0]])],agendaKind)+'</select></label><label>'+t('Responsable')+'<select id="agenda-person">'+opts([['all',t('Todos')],...members.map(m=>[m.user_id,m.name])],agendaPerson)+'</select></label></div><div class="actions"><button data-act="calendarImport">'+t('Importar ICS')+'</button><button data-act="calendarExport">'+t('Exportar ICS')+'</button><button data-act="scanEvent">'+t('Foto o PDF')+'</button><button data-act="calendarFeed">'+t('Suscribir mi calendario')+'</button>'+(android?'':'<button data-act="googleCalendar">'+t('Importar desde Google Calendar')+'</button>')+'</div></section>':kind==='budget'?budgetSummary():kind==='expense'?("<section class=\"hero\"><small>"+t("Gastos registrados en "))+dateLabel(dateKey(),{month:'long'})+'</small><h2>'+money(total)+'</h2></section>':'')+
@@ -452,7 +510,7 @@ function row(i) {
   const member = members.find(m=>m.user_id===i.assignee);
   const checkable = ['task','shopping','pet','deadline'].includes(i.kind);
   const birthday=i.kind==='birthday'?nextBirthday(i.entry_date,dateKey()):null;
-  const tags = [birthday?plural(daysUntil(birthday,dateKey()),'En {count} día','En {count} días'):'',i.entry_date?dateLabel(i.entry_date):'',i.entry_time?.slice(0,5),i.category,member?.name,i.amount!==null?money(i.amount):''].filter(Boolean);
+  const tags = [i.kind==='shopping'&&i.flow?.quantity?new Intl.NumberFormat(locale(),{maximumFractionDigits:2}).format(i.flow.quantity)+' '+i.flow.unit:'',birthday?plural(daysUntil(birthday,dateKey()),'En {count} día','En {count} días'):'',i.entry_date?dateLabel(i.entry_date):'',i.entry_time?.slice(0,5),i.category,member?.name,i.amount!==null?money(i.amount):''].filter(Boolean);
   return '<article class="row '+(i.done?'checked ':'')+'">'+
     (checkable?'<input type="checkbox" data-check="'+i.id+'" aria-label="'+escape(t('Completar {title}',{title:i.title}))+'" '+(i.done?'checked':'')+'>':'')+
     '<div class="grow"><div class="title"><strong>'+escape(i.title)+'</strong></div><div class="meta">'+tags.map(tag=>'<span class="pill">'+escape(tag)+'</span>').join('')+'</div>'+
@@ -461,28 +519,62 @@ function row(i) {
       .map(([id,cents])=>'<p>'+escape(members.find(person=>person.user_id===id)?.name||t('Miembro'))+' · '+money(cents/100)+'</p>').join('')+
       '<button data-settled="'+i.id+'">'+t(i.settled?'Marcar pendiente':'Registrar como liquidado')+'</button></div>':'')+
     (i.kind==='notice'?'<button data-pin-notice="'+i.id+'">'+t(i.done?'Desfijar aviso':'Fijar aviso')+'</button>':'')+
+    relatedFiles(i)+
+    (i.kind==='document'?'<button data-file-version="'+i.id+'">'+t('Subir nueva versión')+'</button>':'')+
+    (i.kind==='deadline'&&!i.done?'<button data-renew="'+i.id+'">'+t('Registrar renovación')+'</button>':'')+
     (i.kind==='recipe'?'<button data-recipe="'+i.id+'">'+t('Usar receta')+'</button>':'')+
     '<div class="actions"><button data-edit="'+i.id+'" aria-label="'+escape(t('Editar {title}',{title:i.title}))+'">'+t('Editar')+'</button></div>'+'</article>';
 }
-function openEditor(kind, entry, source='') {
+function relatedFiles(item) {
+  if(item.kind==='deadline') {
+    const document=active('document').find(file=>file.id===item.flow?.document);
+    const previous=active('deadline').find(record=>record.id===item.flow?.previous);
+    return (document?'<button data-file="'+document.id+'">'+escape(document.title)+'</button>':'')+
+      (previous?'<button data-edit="'+previous.id+'">'+t('Vencimiento anterior')+' · '+dateLabel(previous.entry_date)+'</button>':'');
+  }
+  if(item.kind!=='document') return '';
+  const root=item.flow?.parent||item.id;
+  const versions=active('document').filter(file=>(file.flow?.parent||file.id)===root).sort((a,b)=>b.created_at.localeCompare(a.created_at));
+  if(versions[0]?.id!==item.id||versions.length<2) return '';
+  return '<details><summary>'+t('Historial de versiones')+'</summary>'+versions.slice(1).map(file=>
+    '<button data-file="'+file.id+'">'+escape(dateLabel(file.created_at.slice(0,10)))+' · '+escape(file.attachment_name)+'</button>').join('')+'</details>';
+}
+function workflowFields(kind, entry, original) {
+  const flow=entry?.flow??original?.flow??{};
+  if(kind==='event') return '<fieldset><legend>'+t('Duración y repetición')+'</legend>'+
+    '<label>'+t('Duración en minutos')+'<input name="minutes" type="number" min="5" max="720" value="'+(flow.minutes??60)+'"></label>'+
+    '<label>'+t('Repetición')+'<select name="repeat">'+opts([['',t('Una vez')],['daily',t('Diaria')],['weekly',t('Semanal')],['monthly',t('Mensual')]],flow.repeat??'')+'</select></label>'+
+    '<label>'+t('Repetir hasta')+'<input name="until" type="date" value="'+escape(flow.until)+'"></label>'+
+    '<label>'+t('Aviso dentro de la app')+'<select name="event_reminder">'+opts([['',t('Sin aviso')],['15',t('15 minutos antes')],['30',t('30 minutos antes')],['60',t('1 hora antes')]],String(flow.reminder??''))+'</select></label></fieldset>';
+  if(kind==='recipe') return '<label>'+t('Porciones de la receta')+'<input type="number" name="portions" min="1" max="100" value="'+(flow.portions??1)+'" required></label>';
+  if(kind==='deadline') {
+    const days=entry?.deadline_days??original?.deadline_days??(entry?.deadline_notice==null?[]:[entry.deadline_notice]);
+    return '<label>'+t('Documento vinculado')+'<select name="linked_document">'+opts([['',t('Sin documento')],...active('document').map(file=>[file.id,file.title])],flow.document??'')+'</select></label>'+
+      '<fieldset><legend>'+t('Avisos del vencimiento')+'</legend>'+[0,1,3,7,30].map(day=>
+        '<label class="recipe-check"><input type="checkbox" name="deadline_day" value="'+day+'" '+(days.includes(day)?'checked':'')+'> '+
+        t(day===0?'El mismo día':'{count} días antes',{count:day})+'</label>').join('')+
+      '<small>'+t('Si no eliges una hora, el aviso se programa a las 09:00.')+'</small></fieldset>';
+  }
+  return '';
+}
+function openEditor(kind, entry, source='', initialDay) {
+  const original=/^(version|renew):/.test(source)?entries.find(item=>item.id===source.split(':')[1]&&item.kind===kind):undefined;
   const hasDate = ['event','task','meal','expense','pet','birthday','schedule','budget','deadline'].includes(kind);
   const required = ['event','meal','expense','birthday','schedule','budget','deadline'].includes(kind);
   const assignee = ['event','task','pet','schedule','deadline','expense'].includes(kind);
-  const dateValue = entry ? entry.entry_date : source==='scan'?'':kind==='event'?pickedDay:required?dateKey():'';
+  const dateValue = initialDay ?? (entry ? entry.entry_date : source==='scan'?'':kind==='event'?pickedDay:required?dateKey():'');
   const category = ({shopping:t('Nombre de la lista'),task:t('Nombre de la lista'),meal:t('Momento del día'),expense:t('Categoría'),budget:t('Categoría'),deadline:t('Categoría'),contact:t('Teléfono'),pet:t('Mascota')})[kind];
   editor.innerHTML = '<h2>'+(source==='scan'?t('Revisar borrador'):(entry?t('Editar '):t('Agregar '))+modules[kind][2])+'</h2><form data-form="entry" data-kind="'+kind+'" data-source="'+source+'" data-id="'+(entry?.id??'')+'">'+
     (source==='scan'?'<p class="muted">'+t('Revisa el título, la fecha y la hora antes de guardar.')+'</p>':'')+
-    '<label>'+(kind==='shopping'?t('Producto'):t('Título'))+'<input name="title" maxlength="160" value="'+escape(entry?.title)+'" required></label>'+
+    '<label>'+(kind==='shopping'?t('Producto'):t('Título'))+'<input name="title" maxlength="160" value="'+escape(entry?.title??original?.title)+'" required></label>'+
     (category?'<label>'+category+'<input name="category" maxlength="80" value="'+escape(entry?.category)+'"></label>':'')+
     (hasDate?'<div class="split"><label>'+t('Fecha')+'<input name="entry_date" type="date" value="'+escape(dateValue)+'" '+(required?'required':'')+'></label>'+
       (['expense','budget'].includes(kind)?'<label>'+t('Monto en R$')+'<input name="amount" type="number" step="0.01" min="0" max="9999999999.99" value="'+escape(entry?.amount)+'" required></label>':'<label>'+t('Hora')+'<input name="entry_time" type="time" value="'+escape(entry?.entry_time?.slice(0,5))+'"></label>')+'</div>':'')+
     (assignee?("<label>"+t(kind==='expense'?'Quién pagó':'Responsable')+"<select name=\"assignee\">")+opts([['',t('Sin asignar')],...members.map(m=>[m.user_id,m.name])],entry?.assignee??'')+'</select></label>':'')+
-    '<label>'+(({shopping:t('Cantidad o detalles'),recipe:t('Ingredientes y preparación'),contact:t('Correo, dirección y notas')})[kind]||t('Detalles'))+'<textarea name="details" maxlength="4000" rows="3">'+escape(entry?.details)+'</textarea></label>'+
+    '<label>'+(({shopping:t('Cantidad o detalles'),recipe:t('Ingredientes y preparación'),contact:t('Correo, dirección y notas')})[kind]||t('Detalles'))+'<textarea name="details" maxlength="4000" rows="3">'+escape(entry?.details??original?.details)+'</textarea></label>'+
     (kind==='task'?'<label>'+t('Puntos al completar')+'<input type="number" name="points" min="0" max="100" step="1" value="'+escape(entry?.points??0)+'"></label>':'')+
     (kind==='expense'?expenseFields(entry,members,escape):'')+
-    (kind==='deadline'?'<label>'+t('Aviso push')+'<select name="deadline_notice">'+opts([
-      ['',t('Sin aviso')],['0',t('El mismo día')],['1',t('Un día antes')],['3',t('Tres días antes')],['7',t('Siete días antes')],
-    ],String(entry?.deadline_notice??''))+'</select></label><small>'+t('Si no eliges una hora, el aviso se programa a las 09:00.')+'</small>':'')+
+    workflowFields(kind,entry,original)+
     (fileKinds[kind]&&(!entry||(kind==='deadline'&&entry.author===session.user.id))?'<label>'+
       t(kind==='deadline'?'Adjunto opcional de hasta 20 MB':'Selecciona un archivo de hasta 20 MB')+
       '<input type="file" name="attachment" accept="'+fileKinds[kind].accept+'" '+(kind==='deadline'?'':'required')+'></label>':'')+
@@ -621,7 +713,11 @@ async function showEditor() {
         const data=new DataTransfer();
         data.items.add(value);
         field.files=data.files;
-      } else if (field.type!=='file') field.value=value;
+      } else if (field.type==='checkbox') field.checked=Boolean(value);
+      else if (field.type!=='file'&&!(field instanceof RadioNodeList)) field.value=value;
+    }
+    if (draft.checks) for (const checkbox of form.querySelectorAll('input[type="checkbox"][name]')) {
+      checkbox.checked=draft.checks.some(([name,value])=>checkbox.name===name&&checkbox.value===value);
     }
     syncDateFields(form);
   } catch(error) { showError(error); }
@@ -760,14 +856,19 @@ async function submit(form) {
     if (!recipe) return;
     const available=ingredients(recipe.details);
     const selected=new FormData(form).getAll('ingredient').map(index=>available[Number(index)]).filter(Boolean);
+    const portions=Number(values.portions), base=recipe.flow?.portions??1;
+    if(!Number.isInteger(portions)||portions<1||portions>100) throw new Error(t('Usa entre 1 y 100 porciones.'));
     if (!values.day&&!selected.length) throw new Error('Elige una fecha o algún ingrediente.');
     const category=values.list.trim()||t('Mercado');
     const existing=new Set(active('shopping').filter(item=>!item.done&&item.category===category).map(item=>item.title.toLocaleLowerCase(locale())));
-    const records=values.day?[{kind:'meal',title:recipe.title,entry_date:values.day}]:[];
-    for(const title of selected) {
-      if(existing.has(title.toLocaleLowerCase(locale()))) continue;
-      records.push({kind:'shopping',title,category});
-      existing.add(title.toLocaleLowerCase(locale()));
+    const records=values.day?[{kind:'meal',title:recipe.title,entry_date:values.day,category:values.slot,
+      flow:{recipe:recipe.id,portions}}]:[];
+    for(const line of selected) {
+      const {title,quantity,unit}=ingredientAmount(line,portions/base);
+      const normalized=title.toLocaleLowerCase(locale());
+      if(!quantity&&existing.has(normalized)) continue;
+      records.push({kind:'shopping',title:title.slice(0,160),category,...(quantity?{flow:{quantity,unit}}:{})});
+      existing.add(normalized);
     }
     await saveEntries(records);
     editor.close();render();show(t('Guardado.'));return;
@@ -840,7 +941,21 @@ async function submit(form) {
       JSON.stringify(existing.expense_shares?.weights??null)!==JSON.stringify(payload.expense_shares?.weights??null))) payload.settled=false;
   }
   const kind=form.dataset.kind;
-  if (kind==='deadline') payload.deadline_notice=values.deadline_notice===''?null:Number(values.deadline_notice);
+  const source=form.dataset.source;
+  const previous=/^(version|renew):/.test(source)?active(kind).find(item=>item.id===source.split(':')[1]):undefined;
+  if(kind==='event') {
+    if(values.repeat&&(!values.until||values.until<payload.entry_date)) throw new Error(t('Indica hasta qué fecha se repite el evento.'));
+    payload.flow={minutes:Number(values.minutes||60),repeat:values.repeat||null,until:values.repeat?values.until:null,
+      reminder:payload.entry_time&&values.event_reminder!==''?Number(values.event_reminder):null};
+  }
+  if(kind==='recipe') payload.flow={portions:Number(values.portions)};
+  if(kind==='document'&&previous) payload.flow={parent:previous.flow?.parent||previous.id};
+  if(kind==='deadline') {
+    const days=new FormData(form).getAll('deadline_day').map(Number);
+    payload.deadline_days=days;
+    payload.deadline_notice=null;
+    payload.flow={document:values.linked_document||null,previous:previous?.id||entries.find(item=>item.id===id)?.flow?.previous||null};
+  }
   const recordId=id||crypto.randomUUID();
   const file=form.querySelector('input[type=file]')?.files[0];
   let attachment;
@@ -851,7 +966,14 @@ async function submit(form) {
     attachment={bucket:fileKinds[kind].bucket,path,blob:prepared.blob};
     Object.assign(payload,{attachment_path:path,attachment_name:prepared.name});
   }
-  await saveLocal('casa_entries',id?'update':'insert',recordId,id?payload:{...payload,kind},attachment);
+  if(kind==='deadline'&&previous&&!id) {
+    const user=session.user.id,home=household.id;
+    await enqueueMany([
+      {user,home,entity:'casa_entries',action:'insert',recordId,payload:{...payload,kind},file:attachment},
+      {user,home,entity:'casa_entries',action:'update',recordId:previous.id,payload:{done:true}},
+    ],draftScope(form));
+    await refresh({local:true}); await updateSyncStatus(user); syncSoon();
+  } else await saveLocal('casa_entries',id?'update':'insert',recordId,id?payload:{...payload,kind},attachment);
   if (form.dataset.kind==='event' && payload.entry_date) {
     pickedDay=payload.entry_date; calendarMonth=fromKey(pickedDay);
   }
@@ -951,7 +1073,8 @@ function persistEditor(event) {
   if (!scope || !session) return;
   form.dataset.dirty='true';
   const values=Object.fromEntries([...new FormData(form)].filter(([,value])=>!(value instanceof File)||value.name));
-  void putDraft(session.user.id,scope,values).catch(showError);
+  const checks=[...form.querySelectorAll('input[type="checkbox"][name]:checked')].map(input=>[input.name,input.value]);
+  void putDraft(session.user.id,scope,values,checks).catch(showError);
 }
 document.addEventListener('change',persistEditor);
 document.addEventListener('input',event=>{
@@ -1038,11 +1161,21 @@ document.addEventListener('click',event=>{
   const d=button.dataset;
   if(d.deviceEvent&&deviceCalendar) {
     const item=active('event').find(item=>item.id===d.deviceEvent);
-    if(item) sendToCalendar(item);
+    if(item&&occursOn(item,d.deviceDate)) sendToCalendar({...item,entry_date:d.deviceDate});
   }
+  if(d.menuWeek) {menuOffset+=Number(d.menuWeek);render();}
+  if(d.mealDate) openEditor('meal',undefined,'',d.mealDate);
+  if(d.groupShopping) void run(button,async()=>{
+    const ids=new Set(d.groupShopping.split(','));
+    const items=active('shopping').filter(item=>ids.has(item.id)&&!item.done);
+    await enqueueMany(items.map(item=>({user:session.user.id,home:household.id,entity:'casa_entries',action:'update',recordId:item.id,payload:{done:true}})));
+    await refresh({local:true}); await updateSyncStatus(session.user.id); syncSoon();
+  });
   if(d.view) go(d.view);
   if(d.mode) {mode=d.mode; notice=''; render();}
   if(d.new) openEditor(d.new);
+  if(d.fileVersion) openEditor('document',undefined,'version:'+d.fileVersion);
+  if(d.renew) openEditor('deadline',undefined,'renew:'+d.renew);
   if(d.settled) void run(button,async()=>{
     const item=entries.find(i=>i.id===d.settled&&i.kind==='expense');
     if(item){await saveLocal('casa_entries','update',item.id,{settled:!item.settled});render();}

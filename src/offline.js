@@ -12,7 +12,7 @@ const changes = (user,home) => cache.outbox.where('[user+home]').equals([user,ho
 export const getHomes = async user => (await cache.snapshots.get([user,householdsKey]))?.data;
 export const putHomes = (user,data) => cache.snapshots.put({user,home:householdsKey,data});
 export const getDraft = (user,scope) => cache.drafts.get([user,scope]);
-export const putDraft = (user,scope,values) => cache.drafts.put({user,scope,values});
+export const putDraft = (user,scope,values,checks) => cache.drafts.put({user,scope,values,checks});
 export const clearDraft = (user,scope) => cache.drafts.delete([user,scope]);
 export const localFile = async (user,home,path) => (await cache.files.get([user,home,path]))?.blob;
 export const putFile = (user,home,path,blob) => cache.files.put({user,home,path,blob});

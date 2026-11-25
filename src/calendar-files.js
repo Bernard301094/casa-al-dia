@@ -1,4 +1,5 @@
 import ICAL from 'ical.js';
+import { shiftDate } from './planning.js';
 
 export function readCalendar(text) {
   const calendar=new ICAL.Component(ICAL.parse(text));
@@ -31,6 +32,12 @@ export function writeCalendar(entries) {
     event.summary=record.title;
     event.description=record.details;
     event.startDate=ICAL.Time.fromString(record.entry_date+(record.entry_time?'T'+record.entry_time.slice(0,5)+':00':''));
+    if(record.entry_time) event.duration=ICAL.Duration.fromSeconds((record.flow?.minutes??60)*60);
+    else event.endDate=ICAL.Time.fromString(shiftDate(record.entry_date,1));
+    if(record.flow?.repeat&&record.flow.until) {
+      const until=ICAL.Time.fromString(record.flow.until+(record.entry_time?'T23:59:59':''));
+      component.addPropertyWithValue('rrule',new ICAL.Recur({freq:record.flow.repeat.toUpperCase(),until}));
+    }
     component.addPropertyWithValue('dtstamp',ICAL.Time.fromJSDate(new Date(),true));
     calendar.addSubcomponent(component);
   }

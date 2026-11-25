@@ -16,9 +16,12 @@ export function ingredients(details) {
 
 export function recipeAction(recipe,date,escape) {
   const items=ingredients(recipe.details);
+  const portions=recipe.flow?.portions ?? 1;
   return `<h2>${t('Usar receta')}</h2><form data-form="recipe-plan" data-id="${recipe.id}">
     <strong>${escape(recipe.title)}</strong>
     <label>${t('Fecha del menú')}<input type="date" name="day" value="${date}"></label>
+    <label>${t('Porciones para el menú')}<input type="number" name="portions" min="1" max="100" value="${portions}" required></label>
+    <label>${t('Momento del día')}<select name="slot">${['Desayuno','Almuerzo','Cena'].map(slot=>`<option value="${slot}">${t(slot)}</option>`).join('')}</select></label>
     <fieldset><legend>${t('Ingredientes que necesitas comprar')}</legend>
       ${items.length ? items.map((item,index)=>`<label class="recipe-check"><input type="checkbox" name="ingredient" value="${index}"> ${escape(item)}</label>`).join('') :
       `<p>${t('Añade un encabezado Ingredientes y escribe uno por línea en la receta.')}</p>`}
