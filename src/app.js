@@ -27,7 +27,7 @@ function localizeModules() {
   modules = {
     today: [t('Hoy'),'⌂'], event: [t('Calendario'),'▦',t('evento')], task: [t('Tareas'),'✓',t('tarea')],
     shopping: [t('Compras'),'◫',t('producto')], meal: [t('Comidas'),'♨',t('comida')], expense: [t('Gastos'),'＄',t('gasto')],
-    note: [t('Notas'),'▤',t('nota')], message: [t('Chat'),'◌',t('mensaje')], pet: [t('Mascotas'),'♡',t('cuidado')],
+    note: [t('Notas'),'▤',t('nota')], pet: [t('Mascotas'),'♡',t('cuidado')],
     family: [t('Mi familia'),'♧'], more: [t('Explorar'),'⋯'],
     board: [t('Kanban'),'▥'], routine: [t('Rutinas'),'↻'], lists: [t('Listas'),'☷'], activity: [t('Actividad'),'◉'], location: [t('Mapa'),'⌖'],
     ...extras,
@@ -36,7 +36,7 @@ function localizeModules() {
     event:t('Organiza los compromisos de la familia.'), task:t('Reparte los pendientes y marca lo que ya hicieron.'),
     shopping:t('Lleva la lista al mercado y actualízala en el momento.'), meal:t('Planifica qué van a comer durante la semana.'),
     expense:t('Registra los gastos compartidos en reales.'), note:t('Guarda información que todos necesiten consultar.'),
-    message:t('Conversa con los miembros del hogar.'), pet:t('Lleva el registro de citas, vacunas y otros cuidados.'),
+    pet:t('Lleva el registro de citas, vacunas y otros cuidados.'),
   };
   Object.entries(extras).forEach(([kind, labels]) => { descriptions[kind] = labels[3]; });
 }
@@ -138,7 +138,7 @@ function googleControl() {
 function authScreen() {
   const login = mode === 'login', forgot = mode === 'forgot', reset = mode === 'reset';
   const title = reset ? t('Nueva contraseña') : forgot ? t('Recupera tu cuenta') : login ? t('Entra a tu hogar') : t('Crea tu cuenta');
-  app.innerHTML = '<div class="auth"><div class="auth-art">'+brand+("<h1>"+t("Organicen su hogar en un solo lugar.")+"</h1><p>"+t("Calendario, compras y pendientes de la familia.")+"</p><div class=\"auth-modules\">")+['event','shopping','message'].map(kind=>'<span>'+icon(kind)+modules[kind][0]+'</span>').join('')+'</div></div><div class="auth-form"><section><div class="auth-title"><h2>'+title+'</h2>'+themeControl()+'</div>'+languageControl()+'<p id="notice" class="notice" role="status">'+escape(notice)+'</p><form data-form="auth">'+
+  app.innerHTML = '<div class="auth"><div class="auth-art">'+brand+("<h1>"+t("Organicen su hogar en un solo lugar.")+"</h1><p>"+t("Calendario, compras y pendientes de la familia.")+"</p><div class=\"auth-modules\">")+['event','shopping','routine'].map(kind=>'<span>'+icon(kind)+modules[kind][0]+'</span>').join('')+'</div></div><div class="auth-form"><section><div class="auth-title"><h2>'+title+'</h2>'+themeControl()+'</div>'+languageControl()+'<p id="notice" class="notice" role="status">'+escape(notice)+'</p><form data-form="auth">'+
     (reset?'':("<label>"+t("Correo electrónico")+"<input name=\"email\" type=\"email\" autocomplete=\"email\" required></label>"))+
     (forgot?'':'<label>'+t('Contraseña')+'<input name="password" type="password" minlength="8" autocomplete="'+(login?'current-password':'new-password')+'" required></label>')+
     '<button class="primary">'+(reset?t('Guardar contraseña'):forgot?t('Enviar enlace'):login?t('Entrar'):t('Registrarme'))+'</button></form>'+
@@ -155,18 +155,18 @@ function navigation(keys, css) {
 function render() {
   if (!session || mode === 'reset') { authScreen(); return; }
   const homeBar = homes.length ? ("<label>"+t("Hogar")+"<select id=\"homes\">")+opts(homes.map(h=>[h.id,h.name]),household?.id)+'</select></label>' : '';
-  const add = descriptions[view] && household ? '<button class="primary" data-new="'+view+'">'+icon('plus')+(view==='message'?t('Escribir'):t('Agregar'))+'</button>' : '';
+  const add = descriptions[view] && household ? '<button class="primary" data-new="'+view+'">'+icon('plus')+t('Agregar')+'</button>' : '';
   const invite = sessionStorage.getItem(inviteStorage);
   const top = household ? modules[view][0] : t('Tu hogar');
   app.innerHTML = '<div class="shell"><aside class="side">'+brand+homeBar+
-    (household?navigation(['today','event','lists','routine','shopping','meal','message','more','family'],'nav'):'')+
+    (household?navigation(['today','event','lists','routine','shopping','meal','more','family'],'nav'):'')+
     '<button class="side-footer" data-act="logout">'+icon('signout')+(t("Cerrar sesión")+"</button></aside><main class=\"content\"><header class=\"page-head\"><div><div class=\"workspace-label\">")+escape(household?.name ?? 'Casa al Día')+'</div><h1>'+top+'</h1></div><div class="actions">'+add+themeControl()+'</div>'+languageControl()+'</header>'+
     '<p id="notice" class="notice" role="status">'+escape(notice)+'</p>'+
     (invite && view!== 'family' && household?("<button data-view=\"family\">"+t("Tienes una invitación pendiente")+"</button>"):'')+
     '<section id="sync-status" class="sync-status" aria-live="polite">'+syncMarkup()+'</section>'+
     '<div id="routine-notice" class="notice" role="status">'+reminderText()+'</div>'+
     (!household || view==='family'?family():view==='today'?dashboard():view==='more'?more():view==='lists'?listHub():view==='activity'?activityPanel():view==='routine'?routinePanel({date:routineDate,routines,occurrences:routinesOn(routineDate),members,escape,options:opts}):view==='location'?locations():view==='board'?boardsView({boards,board:activeBoard(),cards:boardCards,members,escape,options:opts,dateLabel}):listing(view))+
-    '</main>'+(household?navigation(['today','event','lists','message','more'],'bottom'):'')+'</div>';
+    '</main>'+(household?navigation(['today','event','lists','more'],'bottom'):'')+'</div>';
 }
 function pushSettings() {
   if (!pushConfigured) return '';
@@ -238,7 +238,7 @@ function emptyState(kind,text,action) {
 
 const exploreGroups = [
   ['Organización',['lists','board','event','routine','schedule','birthday','contact','family']],
-  ['En familia',['recipe','meal','message','photo','document','activity','location']],
+  ['En familia',['recipe','meal','photo','document','activity','location']],
   ['Hogar',['budget','expense','note','pet']],
 ];
 function exploreTile(kind) {
@@ -313,20 +313,18 @@ function results(kind) {
   if(kind==='birthday') data.sort((a,b)=>nextBirthday(a.entry_date,dateKey()).localeCompare(nextBirthday(b.entry_date,dateKey())));
   if(kind==='schedule') data.sort(byDate);
   if (['event','task','meal','pet'].includes(kind)) data.sort(byDate);
-  if (kind==='message') data.reverse();
   return data.length ? data.map(row).join('') : emptyState(kind,filter?t('No encontramos coincidencias.'):t('Aún no hay registros.'),filter?'':t('Agregar ')+modules[kind][2]);
 }
 function row(i) {
-  const member = members.find(m=>m.user_id===(i.kind==='message'?i.author:i.assignee));
+  const member = members.find(m=>m.user_id===i.assignee);
   const checkable = ['task','shopping','pet'].includes(i.kind);
-  const canEdit = i.kind!=='message'||i.author===session.user.id||members.some(m=>m.user_id===session.user.id&&m.role==='owner');
   const birthday=i.kind==='birthday'?nextBirthday(i.entry_date,dateKey()):null;
   const tags = [birthday?plural(daysUntil(birthday,dateKey()),'En {count} día','En {count} días'):'',i.entry_date?dateLabel(i.entry_date):'',i.entry_time?.slice(0,5),i.category,member?.name,i.amount!==null?money(i.amount):''].filter(Boolean);
-  return '<article class="row '+(i.done?'checked ':'')+(i.kind==='message'?'message':'')+'">'+
+  return '<article class="row '+(i.done?'checked ':'')+'">'+
     (checkable?'<input type="checkbox" data-check="'+i.id+'" aria-label="'+escape(t('Completar {title}',{title:i.title}))+'" '+(i.done?'checked':'')+'>':'')+
     '<div class="grow"><div class="title"><strong>'+escape(i.title)+'</strong></div><div class="meta">'+tags.map(tag=>'<span class="pill">'+escape(tag)+'</span>').join('')+'</div>'+
     (i.details?'<p class="detail">'+escape(i.details)+'</p>':'')+(i.attachment_path?'<button data-file="'+i.id+'">'+(i.kind==='photo'?t('Ver archivo'):t('Descargar'))+'</button>':'')+'</div>'+
-    (canEdit?'<div class="actions"><button data-edit="'+i.id+'" aria-label="'+escape(t('Editar {title}',{title:i.title}))+'">'+t('Editar')+'</button></div>':'')+'</article>';
+    '<div class="actions"><button data-edit="'+i.id+'" aria-label="'+escape(t('Editar {title}',{title:i.title}))+'">'+t('Editar')+'</button></div>'+'</article>';
 }
 function openEditor(kind, entry) {
   const hasDate = ['event','task','meal','expense','pet','birthday','schedule','budget'].includes(kind);
@@ -335,14 +333,14 @@ function openEditor(kind, entry) {
   const dateValue = entry ? entry.entry_date : kind==='event'?pickedDay:required?dateKey():'';
   const category = ({shopping:t('Nombre de la lista'),task:t('Nombre de la lista'),meal:t('Momento del día'),expense:t('Categoría'),budget:t('Categoría'),contact:t('Teléfono'),pet:t('Mascota')})[kind];
   editor.innerHTML = '<h2>'+(entry?t('Editar '):t('Agregar '))+modules[kind][2]+'</h2><form data-form="entry" data-kind="'+kind+'" data-id="'+(entry?.id??'')+'">'+
-    '<label>'+(kind==='message'?t('Mensaje'):kind==='shopping'?t('Producto'):t('Título'))+'<input name="title" maxlength="160" value="'+escape(entry?.title)+'" required></label>'+
+    '<label>'+(kind==='shopping'?t('Producto'):t('Título'))+'<input name="title" maxlength="160" value="'+escape(entry?.title)+'" required></label>'+
     (category?'<label>'+category+'<input name="category" maxlength="80" value="'+escape(entry?.category)+'"></label>':'')+
     (hasDate?'<div class="split"><label>'+t('Fecha')+'<input name="entry_date" type="date" value="'+escape(dateValue)+'" '+(required?'required':'')+'></label>'+
       (['expense','budget'].includes(kind)?'<label>'+t('Monto en R$')+'<input name="amount" type="number" step="0.01" min="0" max="9999999999.99" value="'+escape(entry?.amount)+'" required></label>':'<label>'+t('Hora')+'<input name="entry_time" type="time" value="'+escape(entry?.entry_time?.slice(0,5))+'"></label>')+'</div>':'')+
     (assignee?("<label>"+t("Responsable")+"<select name=\"assignee\">")+opts([['',t('Sin asignar')],...members.map(m=>[m.user_id,m.name])],entry?.assignee??'')+'</select></label>':'')+
     '<label>'+(({shopping:t('Cantidad o detalles'),recipe:t('Ingredientes y preparación'),contact:t('Correo, dirección y notas')})[kind]||t('Detalles'))+'<textarea name="details" maxlength="4000" rows="3">'+escape(entry?.details)+'</textarea></label>'+
     (fileKinds[kind]&&!entry?'<label>'+t('Selecciona un archivo de hasta 20 MB')+'<input type="file" name="attachment" accept="'+fileKinds[kind].accept+'" required></label>':'')+
-    '<p id="form-error" role="alert" class="notice"></p><div class="actions"><button class="primary">'+(kind==='message'&&!entry?t('Enviar'):t('Guardar'))+("</button><button type=\"button\" data-act=\"close\">"+t("Cancelar")+"</button>")+
+    '<p id="form-error" role="alert" class="notice"></p><div class="actions"><button class="primary">'+t('Guardar')+("</button><button type=\"button\" data-act=\"close\">"+t("Cancelar")+"</button>")+
     (entry?'<button type="button" class="danger" data-archive="'+entry.id+'">'+t('Archivar')+'</button>':'')+'</div></form>';
   void showEditor();
 }
@@ -360,6 +358,8 @@ async function updateSyncStatus(user) {
 }
 function showSnapshot(data) {
   ({entries,members,activity,routines,days:routineDays,boards,cards:boardCards,lists:listTemplates}=data);
+  entries=entries.filter(item=>item.kind!=='message');
+  activity=activity.filter(item=>item.kind!=='message');
   const focused=document.activeElement;
   if (focused?.id==='search' && document.querySelector('#results')) document.querySelector('#results').innerHTML=results(view);
   else if (!editor.open && !busy && !app.querySelector('form:focus-within')) render();
@@ -383,11 +383,11 @@ async function refresh({local=false}={}) {
   }
   try {
     const [entries,members,routines,days,activity,boards,cards,lists]=await Promise.all([
-      readAll(table('casa_entries').eq('archived',false).order('created_at',{ascending:false}).order('id')),
+      readAll(table('casa_entries').neq('kind','message').eq('archived',false).order('created_at',{ascending:false}).order('id')),
       result(table('casa_members').order('name')),
       readAll(table('casa_routines').eq('archived',false).order('starts_on').order('id')),
       readAll(table('casa_routine_days').order('day').order('routine_id')),
-      result(table('casa_activity').order('created_at',{ascending:false}).limit(75)),
+      result(table('casa_activity').neq('kind','message').order('created_at',{ascending:false}).limit(75)),
       readAll(table('casa_boards').eq('archived',false).order('title').order('id')),
       readAll(table('casa_board_cards').eq('archived',false).order('created_at').order('id')),
       readAll(table('casa_list_templates').eq('archived',false).order('title').order('id')),

@@ -176,7 +176,7 @@ dialog .actions { flex-wrap:wrap }
   .page-head { flex-wrap:nowrap }
   .page-head h1 { overflow-wrap:anywhere }
   .page-head .actions { flex:none }
-  .bottom { position:fixed;bottom:0;left:0;right:0;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:.34rem .3rem calc(.34rem + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--surface);z-index:3 }
+  .bottom { position:fixed;bottom:0;left:0;right:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:.34rem .3rem calc(.34rem + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--surface);z-index:3 }
   .bottom button { position:relative;background:transparent;display:grid;justify-items:center;align-content:center;gap:.22rem;padding:.2rem 0;border-radius:12px;color:var(--muted);font-size:.7rem }
   .bottom button[aria-current=page] { background:var(--accent-soft);color:var(--accent-text) }
   .dashboard-hero { min-height:228px }
