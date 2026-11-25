@@ -1,3 +1,6 @@
+import '@fontsource-variable/dm-sans/wght.css';
+import '@fontsource-variable/outfit/wght.css';
+import { icon, animateEntry, currentTheme, toggleTheme } from './presentation.js';
 import { createClient } from '@supabase/supabase-js';
 import { url, key } from './config.js';
 import { moduleDetails, fileKinds, nextBirthday, daysUntil, monthKey, memberLocation } from './family.js';
@@ -40,7 +43,11 @@ const dateLabel = (key, options = {day:'numeric', month:'long'}) => new Intl.Dat
 let pickedDay = dateKey(), calendarMonth = fromKey(pickedDay);
 const money = value => new Intl.NumberFormat('es-BR',{style:'currency',currency:'BRL'}).format(value);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const brand = '<div class="brand"><img src="icon.svg" alt=""> Casa al Día</div>';
+const brand = '<div class="brand"><img src="icon.svg" alt=""> <span>Casa al Día</span></div>';
+function themeControl() {
+  const dark=currentTheme()==='dark';
+  return '<button type="button" class="icon-button" data-act="theme" aria-label="'+(dark?'Usar tema claro':'Usar tema oscuro')+'">'+icon(dark?'sun':'moon')+'</button>';
+}
 const baseUrl = () => new URL(location.pathname,location.origin).href;
 const opts = (list, selected) => list.map(([value,label]) => '<option value="'+escape(value)+'" '+(value===selected?'selected':'')+'>'+escape(label)+'</option>').join('');
 const active = kind => entries.filter(item => item.kind === kind && !item.archived);
@@ -66,7 +73,7 @@ function errorText(error) {
 function authScreen() {
   const login = mode === 'login', forgot = mode === 'forgot', reset = mode === 'reset';
   const title = reset ? 'Nueva contraseña' : forgot ? 'Recupera tu cuenta' : login ? 'Entra a tu hogar' : 'Crea tu cuenta';
-  app.innerHTML = '<div class="auth"><div class="auth-art">'+brand+'<h1>Organicen su hogar en un solo lugar.</h1><p>Calendario, compras y pendientes de la familia.</p></div><div class="auth-form"><section><h2>'+title+'</h2><p id="notice" class="notice" role="status">'+escape(notice)+'</p><form data-form="auth">'+
+  app.innerHTML = '<div class="auth"><div class="auth-art">'+brand+'<h1>Organicen su hogar en un solo lugar.</h1><p>Calendario, compras y pendientes de la familia.</p><div class="auth-modules">'+['event','shopping','message'].map(kind=>'<span>'+icon(kind)+modules[kind][0]+'</span>').join('')+'</div></div><div class="auth-form"><section><div class="auth-title"><h2>'+title+'</h2>'+themeControl()+'</div><p id="notice" class="notice" role="status">'+escape(notice)+'</p><form data-form="auth">'+
     (reset?'':'<label>Correo electrónico<input name="email" type="email" autocomplete="email" required></label>')+
     (forgot?'':'<label>Contraseña<input name="password" type="password" minlength="8" autocomplete="'+(login?'current-password':'new-password')+'" required></label>')+
     '<button class="primary">'+(reset?'Guardar contraseña':forgot?'Enviar enlace':login?'Entrar':'Registrarme')+'</button></form>'+
@@ -74,21 +81,21 @@ function authScreen() {
     (reset?'':login?'<button data-mode="signup">Crear cuenta</button><button data-mode="forgot">Olvidé mi contraseña</button>':'<button data-mode="login">Volver a iniciar sesión</button>')+
     '</section></div></div>';
 }
-function go(next) { view = next; filter = ''; status = 'all'; notice = ''; render(); window.scrollTo(0,0); }
+function go(next) { view = next; filter = ''; status = 'all'; notice = ''; render(); window.scrollTo(0,0); animateEntry(app.querySelector('main')); }
 function navigation(keys, css) {
-  const current = css === 'bottom' && !keys.includes(view) ? 'more' : view;
+  const current = !keys.includes(view) ? 'more' : view;
   return '<nav class="'+css+'" aria-label="Navegación">'+keys.map(k =>
-    '<button data-view="'+k+'" '+(current===k?'aria-current="page"':'')+'><span class="glyph" aria-hidden="true">'+modules[k][1]+'</span>'+modules[k][0]+'</button>').join('')+'</nav>';
+    '<button data-view="'+k+'" '+(current===k?'aria-current="page"':'')+'>'+icon(k)+modules[k][0]+'</button>').join('')+'</nav>';
 }
 function render() {
   if (!session || mode === 'reset') { authScreen(); return; }
   const homeBar = homes.length ? '<label>Hogar<select id="homes">'+opts(homes.map(h=>[h.id,h.name]),household?.id)+'</select></label>' : '';
-  const add = descriptions[view] && household ? '<button class="primary" data-new="'+view+'">＋ '+(view==='message'?'Escribir':'Agregar')+'</button>' : '';
+  const add = descriptions[view] && household ? '<button class="primary" data-new="'+view+'">'+icon('plus')+(view==='message'?'Escribir':'Agregar')+'</button>' : '';
   const invite = sessionStorage.getItem(inviteStorage);
   const top = household ? modules[view][0] : 'Tu hogar';
   app.innerHTML = '<div class="shell"><aside class="side">'+brand+homeBar+
-    (household?navigation(Object.keys(modules).filter(k=>k!=='more'),'nav'):'')+
-    '<button data-act="logout">Cerrar sesión</button></aside><main class="content"><header class="top"><div><small>'+escape(household?.name ?? 'Casa al Día')+'</small><h1>'+top+'</h1></div>'+add+'</header>'+
+    (household?navigation(['today','event','lists','shopping','meal','message','more','family'],'nav'):'')+
+    '<button class="side-footer" data-act="logout">'+icon('signout')+'Cerrar sesión</button></aside><main class="content"><header class="page-head"><div><div class="workspace-label">'+escape(household?.name ?? 'Casa al Día')+'</div><h1>'+top+'</h1></div><div class="actions">'+add+themeControl()+'</div></header>'+
     '<p id="notice" class="notice" role="status">'+escape(notice)+'</p>'+
     (invite && view!== 'family' && household?'<button data-view="family">Tienes una invitación pendiente</button>':'')+
     (!household || view==='family'?family():view==='today'?dashboard():view==='more'?more():view==='lists'?listHub():view==='activity'?activityPanel():view==='location'?locations():listing(view))+
@@ -114,22 +121,26 @@ function dashboard() {
   const shop = active('shopping').filter(i=>!i.done);
   const meals = active('meal').filter(i=>i.entry_date===today).sort(byDate);
   const upcoming = active('event').filter(i=>i.entry_date>today).sort(byDate).slice(0,4);
-  const card = (kind,title,count,items) => '<section class="card"><small>'+title+'</small><div class="number">'+count+'</div>'+items.slice(0,3).map(i=>'<div class="grow">'+escape(i.title)+'</div>').join('')+'<button data-view="'+kind+'">Ver '+modules[kind][0].toLowerCase()+'</button></section>';
-  return '<section class="hero"><small>'+dateLabel(today,{weekday:'long',day:'numeric',month:'long'})+'</small><h2>Así va el día en '+escape(household.name)+'</h2><p>'+(events.length?'Tienes '+events.length+' compromiso'+(events.length===1?'':'s')+' en la agenda de hoy.':'La agenda de hoy está libre.')+'</p></section>'+
-    '<div class="grid">'+card('event','Compromisos hoy',events.length,events)+card('task','Tareas por atender',tasks.length,tasks)+card('shopping','Compras pendientes',shop.length,shop)+'</div>'+
-    '<section class="panel"><h2>Próximos compromisos</h2>'+(upcoming.length?upcoming.map(row).join(''):'<p class="muted">No hay compromisos próximos.</p>')+'</section>'+
-    '<section class="panel"><h2>Menú de hoy</h2>'+(meals.length?meals.map(row).join(''):'<p class="muted">No hay comidas planificadas.</p>')+'</section>';
+  const card = (kind,title,count,items) => '<button class="summary-card tone-'+kind+'" data-view="'+kind+'"><span class="summary-top"><span class="module-icon">'+icon(kind)+'</span>'+icon('chevron','summary-chevron')+'</span><span class="summary-number">'+count+'</span><strong>'+title+'</strong>'+ (items.length ? '<small>'+escape(items[0].title)+'</small>' : '')+'</button>';
+  return '<section class="hero dashboard-hero"><div class="hero-copy"><span class="hero-date">'+icon('calendar')+dateLabel(today,{weekday:'long',day:'numeric',month:'long'})+'</span><h2>Así va el día<br>en '+escape(household.name)+'</h2><p>'+(events.length?'Tienes '+events.length+' compromiso'+(events.length===1?'':'s')+' en la agenda de hoy.':'La agenda de hoy está libre.')+'</p><button data-new="event" class="hero-button">'+icon('plus')+'Nuevo evento</button></div><div class="hero-art" aria-hidden="true"><div class="hero-orb"></div><div class="hero-deco hero-deco-calendar">'+icon('event')+'</div><div class="hero-deco hero-deco-tasks">'+icon('task')+'</div><div class="hero-deco hero-deco-heart">'+icon('family')+'</div></div></section>'+
+    '<div class="dashboard-stats">'+card('event','Compromisos hoy',events.length,events)+card('task','Tareas pendientes',tasks.length,tasks)+card('shopping','Compras pendientes',shop.length,shop)+'</div>'+
+    '<div class="dashboard-columns"><section class="panel"><div class="section-heading"><h2>Próximos compromisos</h2><button class="text-button" data-view="event">Calendario '+icon('chevron')+'</button></div>'+(upcoming.length?upcoming.map(row).join(''):emptyState('event','No hay compromisos próximos.','Agregar evento'))+'</section>'+
+    '<section class="panel"><div class="section-heading"><h2>Menú de hoy</h2><button class="text-button" data-view="meal">Comidas '+icon('chevron')+'</button></div>'+(meals.length?meals.map(row).join(''):emptyState('meal','No hay comidas planificadas.','Planificar comida'))+'</section></div>';
 }
+function emptyState(kind,text,action) {
+  return '<div class="empty-state"><span class="module-icon">'+icon(kind)+'</span><p>'+text+'</p>'+(action?'<button class="text-button" data-new="'+kind+'">'+icon('plus')+action+'</button>':'')+'</div>';
+}
+
 const exploreGroups = [
   ['Organización',['lists','event','schedule','birthday','contact','family']],
   ['En familia',['recipe','meal','message','photo','document','activity','location']],
   ['Hogar',['budget','expense','note','pet']],
 ];
 function exploreTile(kind) {
-  return '<button class="module-tile" data-view="'+kind+'"><span class="module-icon" aria-hidden="true">'+modules[kind][1]+'</span><strong>'+modules[kind][0]+'</strong></button>';
+  return '<button class="module-tile tone-'+kind+'" data-view="'+kind+'"><span class="module-icon">'+icon(kind)+'</span><strong>'+modules[kind][0]+'</strong>'+icon('chevron','tile-chevron')+'</button>';
 }
 function more() {
-  return exploreGroups.map(([label,kinds])=>'<section class="panel"><h2>'+label+'</h2><div class="module-grid">'+kinds.map(exploreTile).join('')+'</div></section>').join('');
+  return exploreGroups.map(([label,kinds])=>'<section class="panel explore-section"><h2>'+label+'</h2><div class="module-grid">'+kinds.map(exploreTile).join('')+'</div></section>').join('');
 }
 function listHub() {
   return '<div class="grid">'+['task','shopping'].map(kind=>{
@@ -173,7 +184,7 @@ function calendar() {
   start.setDate(1 - (first.getDay()+6)%7);
   const counts = new Map();
   active('event').forEach(i=>counts.set(i.entry_date,(counts.get(i.entry_date)??0)+1));
-  return '<section class="panel"><div class="top"><h2>'+dateLabel(dateKey(first),{month:'long',year:'numeric'})+'</h2><div class="actions"><button data-month="-1" aria-label="Mes anterior">‹</button><button data-month="1" aria-label="Mes siguiente">›</button><button data-act="calendarToday">Hoy</button></div></div>'+
+  return '<section class="panel"><div class="top"><h2>'+dateLabel(dateKey(first),{month:'long',year:'numeric'})+'</h2><div class="actions"><button class="icon-button" data-month="-1" aria-label="Mes anterior">'+icon('left')+'</button><button class="icon-button" data-month="1" aria-label="Mes siguiente">'+icon('right')+'</button><button data-act="calendarToday">Hoy</button></div></div>'+
     '<div class="calendar">'+['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'].map(d=>'<span class="day-label">'+d+'</span>').join('')+
     Array.from({length:42},(_,i)=>{const day = new Date(start);day.setDate(start.getDate()+i);const key=dateKey(day), count=counts.get(key)??0;
       return '<button class="'+(day.getMonth()===first.getMonth()?'':'outside ') + (key===pickedDay?'selected':'')+'" data-day="'+key+'" aria-pressed="'+(key===pickedDay)+'" aria-label="'+dateLabel(key)+', '+count+' eventos">'+day.getDate()+(count?'<small>'+count+' ev.</small>':'')+'</button>';}).join('')+'</div></section>';
@@ -198,7 +209,7 @@ function results(kind) {
   if(kind==='schedule') data.sort(byDate);
   if (['event','task','meal','pet'].includes(kind)) data.sort(byDate);
   if (kind==='message') data.reverse();
-  return data.length ? data.map(row).join('') : '<p class="muted">No hay registros para mostrar.</p>';
+  return data.length ? data.map(row).join('') : emptyState(kind,filter?'No encontramos coincidencias.':'Aún no hay registros.',filter?'':'Agregar '+modules[kind][2]);
 }
 function row(i) {
   const member = members.find(m=>m.user_id===(i.kind==='message'?i.author:i.assignee));
@@ -228,7 +239,7 @@ function openEditor(kind, entry) {
     (fileKinds[kind]&&!entry?'<label>Selecciona un archivo de hasta 20 MB<input type="file" name="attachment" accept="'+fileKinds[kind].accept+'" required></label>':'')+
     '<p id="form-error" role="alert" class="notice"></p><div class="actions"><button class="primary">'+(kind==='message'&&!entry?'Enviar':'Guardar')+'</button><button type="button" data-act="close">Cancelar</button>'+
     (entry?'<button type="button" class="danger" data-archive="'+entry.id+'">Archivar</button>':'')+'</div></form>';
-  editor.showModal();
+  editor.showModal(); animateEntry(editor,14);
 }
 async function refresh() {
   if (!household) return;
@@ -384,6 +395,7 @@ document.addEventListener('click',event=>{
   if(d.day) {pickedDay=d.day; calendarMonth=fromKey(pickedDay);render();}
   if(d.month) {calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+Number(d.month),1,12);pickedDay=dateKey(calendarMonth);render();}
   if(d.act==='calendarToday') {pickedDay=dateKey();calendarMonth=fromKey(pickedDay);render();}
+  if(d.act==='theme') {toggleTheme(); const control=button.querySelector('svg'); if(control) control.outerHTML=icon(currentTheme()==='dark'?'sun':'moon'); button.setAttribute('aria-label',currentTheme()==='dark'?'Usar tema claro':'Usar tema oscuro');}
   if(d.act==='close') editor.close();
   if(d.act==='google') void run(button,()=>result(db.auth.signInWithOAuth({provider:'google',options:{redirectTo:baseUrl()}})));
   if(d.file) void run(button,async()=>{
