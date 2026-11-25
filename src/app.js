@@ -9,6 +9,9 @@ import { createClient } from '@supabase/supabase-js';
 import { url, key } from './config.js';
 import { moduleDetails, fileKinds, nextBirthday, daysUntil, monthKey, memberLocation } from './family.js';
 
+const returnUrl = new URL(location.href);
+const fragment = new URLSearchParams(returnUrl.hash.slice(1));
+const oauthError = returnUrl.searchParams.get('error') ?? fragment.get('error');
 const db = createClient(url, key);
 const app = document.querySelector('#app');
 const editor = document.querySelector('#editor');
@@ -48,7 +51,8 @@ let boards=[], boardCards=[], listTemplates=[], chosenBoard;
 const organizationTables={board:'casa_boards',card:'casa_board_cards',template:'casa_list_templates'};
 const activeBoard = () => boards.find(board=>board.id===chosenBoard)??boards[0];
 let routines = [], routineDays = [];
-let view = 'today', filter = '', status = 'all', mode = 'login', notice = '';
+let view = 'today', filter = '', status = 'all', mode = 'login', notice = oauthError ? t(oauthError==='access_denied'
+  ? 'Se canceló el acceso con Google.' : 'No se pudo completar el acceso. Inténtalo de nuevo.') : '';
 let busy = false, generation = 0, refreshVersion = 0;
 const dateKey = (d = new Date()) => [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
 const fromKey = key => new Date(key + 'T12:00:00');
@@ -95,8 +99,23 @@ function errorText(error) {
     'No pudimos obtener tu ubicación. Revisa el permiso del navegador.',
     'El archivo supera el límite de 20 MB.', 'Selecciona dos responsables distintos para alternar.',
     'Indica una hora para el recordatorio.', 'Este navegador no admite avisos push.',
-    'Activa el permiso de notificaciones en tu navegador.', 'No se pudo registrar este dispositivo.'].includes(msg)) return t(msg);
+    'Activa el permiso de notificaciones en tu navegador.', 'No se pudo registrar este dispositivo.', 'No se pudo verificar el acceso con Google.'].includes(msg)) return t(msg);
   return t('No se pudo completar la operación.') + (locale()==='es-419' && msg ? ' '+msg : '');
+}
+async function startGoogle() {
+  const settingsResponse=await fetch(url+'/auth/v1/settings',{headers:{apikey:key},cache:'no-store'});
+  if (!settingsResponse.ok) throw new Error('No se pudo verificar el acceso con Google.');
+  const settings=await settingsResponse.json();
+  if (settings.external?.google===false) {
+    show(t('El acceso con Google está pendiente de configuración.'));
+    return;
+  }
+  const data=await result(db.auth.signInWithOAuth({
+    provider:'google',
+    options:{redirectTo:baseUrl(),skipBrowserRedirect:true,queryParams:{prompt:'select_account'}},
+  }));
+  if (!data.url) throw new Error('No se pudo verificar el acceso con Google.');
+  location.assign(data.url);
 }
 function authScreen() {
   const login = mode === 'login', forgot = mode === 'forgot', reset = mode === 'reset';
@@ -105,7 +124,7 @@ function authScreen() {
     (reset?'':("<label>"+t("Correo electrónico")+"<input name=\"email\" type=\"email\" autocomplete=\"email\" required></label>"))+
     (forgot?'':'<label>'+t('Contraseña')+'<input name="password" type="password" minlength="8" autocomplete="'+(login?'current-password':'new-password')+'" required></label>')+
     '<button class="primary">'+(reset?t('Guardar contraseña'):forgot?t('Enviar enlace'):login?t('Entrar'):t('Registrarme'))+'</button></form>'+
-    (login||mode==='signup'?("<button type=\"button\" data-act=\"google\">"+t("Continuar con Google")+"</button>"):'')+
+    (login||mode==='signup'?('<button type="button" class="google-button" data-act="google">'+t('Continuar con Google')+'</button>'):'')+
     (reset?'':login?("<button data-mode=\"signup\">"+t("Crear cuenta")+"</button><button data-mode=\"forgot\">"+t("Olvidé mi contraseña")+"</button>"):("<button data-mode=\"login\">"+t("Volver a iniciar sesión")+"</button>"))+
     '</section></div></div>';
 }
@@ -622,7 +641,8 @@ document.addEventListener('click',event=>{
     await refresh(); render();
   });
   if(d.act==='close') editor.close();
-  if(d.act==='google') void run(button,()=>result(db.auth.signInWithOAuth({provider:'google',options:{redirectTo:baseUrl()}})));
+  if(d.act==='google') void run(button,startGoogle);
+
   if(d.file) void run(button,async()=>{
     const item=entries.find(i=>i.id===d.file);
     if (!item) return;
@@ -660,6 +680,12 @@ app.textContent=t('Cargando Casa al Día…');
 db.auth.onAuthStateChange((event,current)=>{
   if (event==='PASSWORD_RECOVERY') mode='reset';
   if (['INITIAL_SESSION','PASSWORD_RECOVERY','SIGNED_OUT','SIGNED_IN'].includes(event)) {
+    if (event==='INITIAL_SESSION' && oauthError) {
+      const clean=new URL(location.href);
+      for (const key of ['error','error_code','error_description']) clean.searchParams.delete(key);
+      if (new URLSearchParams(clean.hash.slice(1)).has('error')) clean.hash='';
+      history.replaceState(null,'',clean);
+    }
     setTimeout(()=>{if(event==='SIGNED_IN'&&session?.user.id===current?.user.id)return;handleSession(current).catch(error=>{render();showError(error);});},0);
   }
 });

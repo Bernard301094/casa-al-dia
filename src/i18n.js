@@ -1,4 +1,7 @@
 const portuguese = {
+  "Se canceló el acceso con Google.":"O login com o Google foi cancelado.",
+  "No se pudo completar el acceso. Inténtalo de nuevo.":"Não foi possível entrar. Tente novamente.",
+  "No se pudo verificar el acceso con Google.":"Não foi possível verificar o login com o Google.",
   "Tablero": "Quadro",
   "Nuevo tablero": "Novo quadro",
   "Editar tablero": "Editar quadro",
