@@ -1,5 +1,7 @@
+import { readCalendar, writeCalendar } from './calendar-files.js';
+import { shiftDate, ingredients, recipeAction, splitCents, expenseFields } from './planning.js';
 import { syncDateFields } from './date-picker.js';
-import { enqueue, readHome, putHome, getHomes, keepLocalHomes, createLocalHome, replay, queueStatus, getDraft, putDraft, localFile, putFile } from './offline.js';
+import { enqueue, enqueueMany, readHome, putHome, getHomes, keepLocalHomes, createLocalHome, replay, queueStatus, getDraft, putDraft, localFile, putFile } from './offline.js';
 import { boardsView, listTemplatesView, organizeEditor } from './organize.js';
 import { pushConfigured, pushEnabled, enablePush, disablePush, listenForPush } from './push.js';
 import { occurrence, routinePanel, routineEditor } from './routines.js';
@@ -29,6 +31,7 @@ function localizeModules() {
     shopping: [t('Compras'),'◫',t('producto')], meal: [t('Comidas'),'♨',t('comida')], expense: [t('Gastos'),'＄',t('gasto')],
     note: [t('Notas'),'▤',t('nota')], pet: [t('Mascotas'),'♡',t('cuidado')],
     family: [t('Mi familia'),'♧'], more: [t('Explorar'),'⋯'],
+    deadline:[t('Vencimientos'),'◷',t('vencimiento')], notice:[t('Tablón'),'▤',t('aviso')],
     board: [t('Kanban'),'▥'], routine: [t('Rutinas'),'↻'], lists: [t('Listas'),'☷'], activity: [t('Actividad'),'◉'], location: [t('Mapa'),'⌖'],
     ...extras,
   };
@@ -36,6 +39,7 @@ function localizeModules() {
     event:t('Organiza los compromisos de la familia.'), task:t('Reparte los pendientes y marca lo que ya hicieron.'),
     shopping:t('Lleva la lista al mercado y actualízala en el momento.'), meal:t('Planifica qué van a comer durante la semana.'),
     expense:t('Registra los gastos compartidos en reales.'), note:t('Guarda información que todos necesiten consultar.'),
+    deadline:t('Organiza renovaciones, vacunas y pagos por fecha.'), notice:t('Comparte avisos que todos puedan consultar.'),
     pet:t('Lleva el registro de citas, vacunas y otros cuidados.'),
   };
   Object.entries(extras).forEach(([kind, labels]) => { descriptions[kind] = labels[3]; });
@@ -73,6 +77,7 @@ const tomorrowKey = (now = new Date()) => {
   return dateKey(tomorrow);
 };
 let routineDate = dateKey();
+let agendaWeek=false, agendaKind='all', agendaPerson='all';
 let pickedDay = dateKey(), calendarMonth = fromKey(pickedDay);
 const money = value => new Intl.NumberFormat(locale(),{style:'currency',currency:'BRL'}).format(value);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -96,6 +101,9 @@ async function result(request) {
 }
 function errorText(error) {
   const msg = error.message || '';
+  if (['Elige una fecha o algún ingrediente.','Selecciona un archivo ICS de hasta 2 MB.',
+    'El archivo ICS no es válido.','El archivo supera 500 eventos.',
+    'No hay eventos nuevos compatibles en el archivo.','Indica quién pagó y agrega al menos una parte.'].includes(msg)) return t(msg);
   if (msg==='List name already in use') return t('Ya existe una lista con ese nombre.');
   if (msg==='Template unavailable') return t('La plantilla ya no está disponible.');
   if (['Escribe un nombre.','Incluye de 1 a 50 elementos de hasta 160 caracteres cada uno.',
@@ -202,7 +210,12 @@ function reminderText() {
     const scheduled=new Date(item.day+'T'+item.due_time.slice(0,5));
     return now.getTime()>=scheduled.getTime()-item.reminder_minutes*60000;
   });
-  return due.length ? escape(t('Recordatorio de rutinas'))+': '+due.map(item=>escape(item.title)).join(' · ') : '';
+  const deadlines=active('deadline').filter(item=>!item.done&&item.entry_date<=shiftDate(today,7)&&
+    (!item.assignee||item.assignee===session.user.id));
+  return [
+    due.length ? escape(t('Recordatorio de rutinas'))+': '+due.map(item=>escape(item.title)).join(' · ') : '',
+    deadlines.length ? escape(t('Vencimientos'))+': '+deadlines.slice(0,5).map(item=>escape(item.title)).join(' · ') : '',
+  ].filter(Boolean).join('<br>');
 }
 function updateRoutineNotice() {
   const target=document.querySelector('#routine-notice');
@@ -237,8 +250,8 @@ function emptyState(kind,text,action) {
 }
 
 const exploreGroups = [
-  ['Organización',['lists','board','event','routine','schedule','birthday','contact','family']],
-  ['En familia',['recipe','meal','photo','document','activity','location']],
+  ['Organización',['lists','board','event','routine','deadline','schedule','birthday','contact','family']],
+  ['En familia',['recipe','meal','photo','document','notice','activity','location']],
   ['Hogar',['budget','expense','note','pet']],
 ];
 function exploreTile(kind) {
@@ -246,6 +259,16 @@ function exploreTile(kind) {
 }
 function more() {
   return exploreGroups.map(([label,kinds])=>'<section class="panel explore-section"><h2>'+t(label)+'</h2><div class="module-grid">'+kinds.map(exploreTile).join('')+'</div></section>').join('');
+}
+function pointsPanel() {
+  const totals=new Map();
+  for(const item of active('task')) {
+    if(item.done&&item.assignee&&item.points) totals.set(item.assignee,(totals.get(item.assignee)||0)+item.points);
+  }
+  if(!totals.size) return '';
+  return '<section class="panel"><h2>'+t('Puntos por tareas')+'</h2>'+members.filter(person=>totals.has(person.user_id))
+    .map(person=>'<div class="row"><strong class="grow">'+escape(person.name)+'</strong><span>'+
+      totals.get(person.user_id)+'</span></div>').join('')+'</section>';
 }
 function listHub() {
   return '<div class="grid">'+['task','shopping'].map(kind=>{
@@ -256,7 +279,7 @@ function listHub() {
     },new Map());
     return '<section class="panel"><h2>'+modules[kind][0]+'</h2>'+[...groups].map(([name,items])=>'<div class="row"><span class="grow">'+escape(name)+'</span><small>'+plural(items.filter(i=>!i.done).length,'{count} pendiente','{count} pendientes')+'</small></div>').join('')+
       '<button data-view="'+kind+'">'+t('Abrir ') +modules[kind][0].toLowerCase()+'</button><button data-new="'+kind+'" class="primary">'+t('Agregar ')+modules[kind][2]+'</button></section>';
-  }).join('')+'</div>'+listTemplatesView(listTemplates,escape);
+  }).join('')+'</div>'+listTemplatesView(listTemplates,escape)+pointsPanel();
 }
 function activityPanel() {
   const labels={created:t('agregó'),updated:t('actualizó'),completed:t('completó'),archived:t('archivó')};
@@ -283,12 +306,33 @@ function budgetSummary() {
   return '<section class="hero"><small>'+dateLabel(dateKey(),{month:'long',year:'numeric'})+'</small><h2>'+money(spent)+(t(" gastados")+"</h2><p>")+money(budget)+t(' de presupuesto · ')+money(budget-spent)+(t(" disponibles")+"</p><button data-view=\"expense\">"+t("Ver gastos")+"</button></section>");
 }
 function byDate(a,b) { return ((a.entry_date??'9999')+(a.entry_time??'')).localeCompare((b.entry_date??'9999')+(b.entry_time??'')); }
+const agendaKinds=['event','task','routine','schedule','meal','birthday','deadline'];
+function agendaItems(day) {
+  const q=filter.trim().toLocaleLowerCase(locale());
+  return [
+    ...entries.filter(item=>agendaKinds.includes(item.kind)&&!item.archived&&
+      (item.kind==='birthday' ? nextBirthday(item.entry_date,day)===day : item.entry_date===day)),
+    ...routinesOn(day).filter(item=>item.status!=='skipped').map(item=>({...item,kind:'routine',entry_time:item.due_time})),
+  ].filter(item=>(agendaKind==='all'||item.kind===agendaKind) && (agendaPerson==='all'||item.assignee===agendaPerson) &&
+    (!q||[item.title,item.details].some(text=>text?.toLocaleLowerCase(locale()).includes(q))))
+    .sort((a,b)=>(a.entry_time||'').localeCompare(b.entry_time||''));
+}
+function agendaRows() {
+  return Array.from({length:agendaWeek?7:1},(_,i)=>{
+    const day=shiftDate(pickedDay,i), data=agendaItems(day);
+    return '<section class="agenda-day"><h3>'+dateLabel(day,{weekday:'long',day:'numeric',month:'long'})+'</h3>'+
+      (data.length?data.map(item=>'<div class="row"><small>'+modules[item.kind][0]+'</small><strong class="grow">'+escape(item.title)+'</strong>'+
+        '<span>'+escape(item.entry_time?.slice(0,5))+'</span>'+
+        (item.kind==='routine'?'<button data-view="routine">'+t('Ver rutinas')+'</button>':'<button data-edit="'+item.id+'">'+t('Editar')+'</button>')+'</div>').join(''):
+        '<p class="muted">'+t('Aún no hay registros.')+'</p>')+'</section>';
+  }).join('');
+}
 function calendar() {
   const first = new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),1,12);
   const start = new Date(first);
   start.setDate(1 - (first.getDay()+6)%7);
   const counts = new Map();
-  active('event').forEach(i=>counts.set(i.entry_date,(counts.get(i.entry_date)??0)+1));
+  for(let i=0;i<42;i++){const day=shiftDate(dateKey(start),i);counts.set(day,agendaItems(day).length);}
   return '<section class="panel"><div class="top"><h2>'+dateLabel(dateKey(first),{month:'long',year:'numeric'})+("</h2><div class=\"actions\"><button class=\"icon-button\" data-month=\"-1\" aria-label=\""+t("Mes anterior")+"\">")+icon('left')+("</button><button class=\"icon-button\" data-month=\"1\" aria-label=\""+t("Mes siguiente")+"\">")+icon('right')+("</button><button data-act=\"calendarToday\">"+t("Hoy")+"</button></div></div>")+
     '<div class="calendar">'+Array.from({length:7},(_,i)=>dateLabel(dateKey(new Date(2024,0,i+1)),{weekday:'short'})).map(d=>'<span class="day-label">'+d+'</span>').join('')+
     Array.from({length:42},(_,i)=>{const day = new Date(start);day.setDate(start.getDate()+i);const key=dateKey(day), count=counts.get(key)??0;
@@ -302,43 +346,54 @@ function listing(kind) {
   const month = dateKey().slice(0,7);
   const total = active('expense').filter(i=>i.entry_date.startsWith(month)).reduce((sum,i)=>sum+Number(i.amount),0);
   return '<p class="muted">'+descriptions[kind]+'</p>'+
-    (kind==='event'?calendar():kind==='budget'?budgetSummary():kind==='expense'?("<section class=\"hero\"><small>"+t("Gastos registrados en "))+dateLabel(dateKey(),{month:'long'})+'</small><h2>'+money(total)+'</h2></section>':'')+
+    (kind==='deadline'?'<section class="hero"><h2>'+t('Próximos 7 días y vencidos')+'</h2>'+
+      '<p>'+active('deadline').filter(item=>!item.done&&item.entry_date<=shiftDate(dateKey(),7)).length+'</p></section>':'')+
+    (kind==='event'?calendar()+'<section class="panel"><div class="filters"><label>'+t('Vista')+'<select id="agenda-mode">'+opts([['day',t('Día')],['week',t('Semana')]],agendaWeek?'week':'day')+'</select></label><label>'+t('Tipo')+'<select id="agenda-kind">'+opts([['all',t('Todos')],...agendaKinds.map(k=>[k,modules[k][0]])],agendaKind)+'</select></label><label>'+t('Responsable')+'<select id="agenda-person">'+opts([['all',t('Todos')],...members.map(m=>[m.user_id,m.name])],agendaPerson)+'</select></label></div><div class="actions"><button data-act="calendarImport">'+t('Importar ICS')+'</button><button data-act="calendarExport">'+t('Exportar ICS')+'</button></div></section>':kind==='budget'?budgetSummary():kind==='expense'?("<section class=\"hero\"><small>"+t("Gastos registrados en "))+dateLabel(dateKey(),{month:'long'})+'</small><h2>'+money(total)+'</h2></section>':'')+
     '<section class="panel"><div class="top"><h2>'+(kind==='event'?dateLabel(pickedDay,{weekday:'long',day:'numeric',month:'long'}):t('Registros'))+'</h2></div>'+
     ("<div class=\"filters\"><input id=\"search\" type=\"search\" aria-label=\""+t("Buscar")+"\" placeholder=\""+t("Buscar…")+"\" value=\"")+escape(filter)+'">'+
-    (['task','shopping','pet'].includes(kind)?("<select id=\"status\" aria-label=\""+t("Estado")+"\">")+opts([['all',t('Todos')],['open',t('Pendientes')],['done',t('Completados')]],status)+'</select>':'')+
+    (['task','shopping','pet','deadline'].includes(kind)?("<select id=\"status\" aria-label=\""+t("Estado")+"\">")+opts([['all',t('Todos')],['open',t('Pendientes')],['done',t('Completados')]],status)+'</select>':'')+
     '</div><div id="results">'+results(kind)+'</div></section>';
 }
 function results(kind) {
+  if(kind==='event') return agendaRows();
   const data = filtered(kind);
+  if(kind==='notice') data.sort((a,b)=>Number(b.done)-Number(a.done));
   if(kind==='birthday') data.sort((a,b)=>nextBirthday(a.entry_date,dateKey()).localeCompare(nextBirthday(b.entry_date,dateKey())));
   if(kind==='schedule') data.sort(byDate);
-  if (['event','task','meal','pet'].includes(kind)) data.sort(byDate);
+  if (['event','task','meal','pet','deadline'].includes(kind)) data.sort(byDate);
   return data.length ? data.map(row).join('') : emptyState(kind,filter?t('No encontramos coincidencias.'):t('Aún no hay registros.'),filter?'':t('Agregar ')+modules[kind][2]);
 }
 function row(i) {
   const member = members.find(m=>m.user_id===i.assignee);
-  const checkable = ['task','shopping','pet'].includes(i.kind);
+  const checkable = ['task','shopping','pet','deadline'].includes(i.kind);
   const birthday=i.kind==='birthday'?nextBirthday(i.entry_date,dateKey()):null;
   const tags = [birthday?plural(daysUntil(birthday,dateKey()),'En {count} día','En {count} días'):'',i.entry_date?dateLabel(i.entry_date):'',i.entry_time?.slice(0,5),i.category,member?.name,i.amount!==null?money(i.amount):''].filter(Boolean);
   return '<article class="row '+(i.done?'checked ':'')+'">'+
     (checkable?'<input type="checkbox" data-check="'+i.id+'" aria-label="'+escape(t('Completar {title}',{title:i.title}))+'" '+(i.done?'checked':'')+'>':'')+
     '<div class="grow"><div class="title"><strong>'+escape(i.title)+'</strong></div><div class="meta">'+tags.map(tag=>'<span class="pill">'+escape(tag)+'</span>').join('')+'</div>'+
     (i.details?'<p class="detail">'+escape(i.details)+'</p>':'')+(i.attachment_path?'<button data-file="'+i.id+'">'+(i.kind==='photo'?t('Ver archivo'):t('Descargar'))+'</button>':'')+'</div>'+
+    (i.expense_shares?.shares?'<div class="grow">'+Object.entries(i.expense_shares.shares).filter(([id])=>id!==i.assignee)
+      .map(([id,cents])=>'<p>'+escape(members.find(person=>person.user_id===id)?.name||t('Miembro'))+' · '+money(cents/100)+'</p>').join('')+
+      '<button data-settled="'+i.id+'">'+t(i.settled?'Marcar pendiente':'Registrar como liquidado')+'</button></div>':'')+
+    (i.kind==='notice'?'<button data-pin-notice="'+i.id+'">'+t(i.done?'Desfijar aviso':'Fijar aviso')+'</button>':'')+
+    (i.kind==='recipe'?'<button data-recipe="'+i.id+'">'+t('Usar receta')+'</button>':'')+
     '<div class="actions"><button data-edit="'+i.id+'" aria-label="'+escape(t('Editar {title}',{title:i.title}))+'">'+t('Editar')+'</button></div>'+'</article>';
 }
 function openEditor(kind, entry) {
-  const hasDate = ['event','task','meal','expense','pet','birthday','schedule','budget'].includes(kind);
-  const required = ['event','meal','expense','birthday','schedule','budget'].includes(kind);
-  const assignee = ['event','task','pet','schedule'].includes(kind);
+  const hasDate = ['event','task','meal','expense','pet','birthday','schedule','budget','deadline'].includes(kind);
+  const required = ['event','meal','expense','birthday','schedule','budget','deadline'].includes(kind);
+  const assignee = ['event','task','pet','schedule','deadline','expense'].includes(kind);
   const dateValue = entry ? entry.entry_date : kind==='event'?pickedDay:required?dateKey():'';
-  const category = ({shopping:t('Nombre de la lista'),task:t('Nombre de la lista'),meal:t('Momento del día'),expense:t('Categoría'),budget:t('Categoría'),contact:t('Teléfono'),pet:t('Mascota')})[kind];
+  const category = ({shopping:t('Nombre de la lista'),task:t('Nombre de la lista'),meal:t('Momento del día'),expense:t('Categoría'),budget:t('Categoría'),deadline:t('Categoría'),contact:t('Teléfono'),pet:t('Mascota')})[kind];
   editor.innerHTML = '<h2>'+(entry?t('Editar '):t('Agregar '))+modules[kind][2]+'</h2><form data-form="entry" data-kind="'+kind+'" data-id="'+(entry?.id??'')+'">'+
     '<label>'+(kind==='shopping'?t('Producto'):t('Título'))+'<input name="title" maxlength="160" value="'+escape(entry?.title)+'" required></label>'+
     (category?'<label>'+category+'<input name="category" maxlength="80" value="'+escape(entry?.category)+'"></label>':'')+
     (hasDate?'<div class="split"><label>'+t('Fecha')+'<input name="entry_date" type="date" value="'+escape(dateValue)+'" '+(required?'required':'')+'></label>'+
       (['expense','budget'].includes(kind)?'<label>'+t('Monto en R$')+'<input name="amount" type="number" step="0.01" min="0" max="9999999999.99" value="'+escape(entry?.amount)+'" required></label>':'<label>'+t('Hora')+'<input name="entry_time" type="time" value="'+escape(entry?.entry_time?.slice(0,5))+'"></label>')+'</div>':'')+
-    (assignee?("<label>"+t("Responsable")+"<select name=\"assignee\">")+opts([['',t('Sin asignar')],...members.map(m=>[m.user_id,m.name])],entry?.assignee??'')+'</select></label>':'')+
+    (assignee?("<label>"+t(kind==='expense'?'Quién pagó':'Responsable')+"<select name=\"assignee\">")+opts([['',t('Sin asignar')],...members.map(m=>[m.user_id,m.name])],entry?.assignee??'')+'</select></label>':'')+
     '<label>'+(({shopping:t('Cantidad o detalles'),recipe:t('Ingredientes y preparación'),contact:t('Correo, dirección y notas')})[kind]||t('Detalles'))+'<textarea name="details" maxlength="4000" rows="3">'+escape(entry?.details)+'</textarea></label>'+
+    (kind==='task'?'<label>'+t('Puntos al completar')+'<input type="number" name="points" min="0" max="100" step="1" value="'+escape(entry?.points??0)+'"></label>':'')+
+    (kind==='expense'?expenseFields(entry,members,escape):'')+
     (fileKinds[kind]&&!entry?'<label>'+t('Selecciona un archivo de hasta 20 MB')+'<input type="file" name="attachment" accept="'+fileKinds[kind].accept+'" required></label>':'')+
     '<p id="form-error" role="alert" class="notice"></p><div class="actions"><button class="primary">'+t('Guardar')+("</button><button type=\"button\" data-act=\"close\">"+t("Cancelar")+"</button>")+
     (entry?'<button type="button" class="danger" data-archive="'+entry.id+'">'+t('Archivar')+'</button>':'')+'</div></form>';
@@ -479,6 +534,15 @@ async function showEditor() {
     syncDateFields(form);
   } catch(error) { showError(error); }
 }
+async function saveEntries(records) {
+  if (!records.length) return;
+  const user=session.user.id,home=household.id;
+  await enqueueMany(records.map(payload=>({user,home,entity:'casa_entries',action:'insert',recordId:crypto.randomUUID(),payload})),
+    draftScope(editor.querySelector('form')));
+  await refresh({local:true});
+  await updateSyncStatus(user);
+  setTimeout(syncSoon,0);
+}
 async function saveLocal(entity,action,recordId,payload,file) {
   const user=session.user.id,home=household.id;
   const scope=editor.open ? draftScope(editor.querySelector('form')) : '';
@@ -492,6 +556,7 @@ async function saveLocal(entity,action,recordId,payload,file) {
 async function selectHouse(next,{local=false}={}) {
   const previous=subscription;
   subscription=undefined;
+  if(household?.id!==next?.id) agendaPerson='all';
   household=next; currentInviteLink=''; entries=[]; members=[]; routines=[]; routineDays=[]; routineDate=dateKey(); boards=[]; boardCards=[]; listTemplates=[]; chosenBoard=undefined; notice='';
   if (previous) await db.removeChannel(previous);
   if (!next || household?.id!==next.id || !session) { render(); return; }
@@ -513,7 +578,7 @@ async function handleSession(next) {
   const changed=session?.user.id!==next?.user.id;
   session=next;
   if (mode==='reset') {render(); return;}
-  if (changed && next) {view='today'; await loadHomes(undefined,{cachedFirst:true}); void listenForPush(next.user.id,show).catch(()=>{});syncSoon();}
+  if (changed && next) {agendaPerson='all';view='today'; await loadHomes(undefined,{cachedFirst:true}); void listenForPush(next.user.id,show).catch(()=>{});syncSoon();}
   if (!next) {
     ++generation; syncStatus={count:0,failed:false}; household=undefined; entries=[]; members=[]; homes=[]; routines=[]; routineDays=[]; boards=[]; boardCards=[]; listTemplates=[]; chosenBoard=undefined;
     if(subscription) {const old=subscription; subscription=undefined; await db.removeChannel(old);}
@@ -523,6 +588,41 @@ async function handleSession(next) {
 async function submit(form) {
   const values=Object.fromEntries(new FormData(form));
   const type=form.dataset.form;
+  if (type==='calendar-import') {
+    const file=values.calendar;
+    if (!file?.size || file.size>2000000) throw new Error('Selecciona un archivo ICS de hasta 2 MB.');
+    let parsed;
+    try {parsed=readCalendar(await file.text());} catch {throw new Error('El archivo ICS no es válido.');}
+    if (parsed.events.length>500) throw new Error('El archivo supera 500 eventos.');
+    const seen=new Set(active('event').map(item=>[item.title,item.entry_date,item.entry_time?.slice(0,5)||''].join('|')));
+    const records=parsed.events.filter(item=>{
+      const signature=[item.title,item.entry_date,item.entry_time||''].join('|');
+      if(seen.has(signature)) return false;
+      seen.add(signature);return true;
+    });
+    if (!records.length) throw new Error('No hay eventos nuevos compatibles en el archivo.');
+    await saveEntries(records);
+    editor.close();render();
+    show(t('Eventos importados: {count}. Omitidos: {skipped}.',{count:records.length,skipped:parsed.skipped+parsed.events.length-records.length}));
+    return;
+  }
+  if (type==='recipe-plan') {
+    const recipe=entries.find(item=>item.id===form.dataset.id&&item.kind==='recipe');
+    if (!recipe) return;
+    const available=ingredients(recipe.details);
+    const selected=new FormData(form).getAll('ingredient').map(index=>available[Number(index)]).filter(Boolean);
+    if (!values.day&&!selected.length) throw new Error('Elige una fecha o algún ingrediente.');
+    const category=values.list.trim()||t('Mercado');
+    const existing=new Set(active('shopping').filter(item=>!item.done&&item.category===category).map(item=>item.title.toLocaleLowerCase(locale())));
+    const records=values.day?[{kind:'meal',title:recipe.title,entry_date:values.day}]:[];
+    for(const title of selected) {
+      if(existing.has(title.toLocaleLowerCase(locale()))) continue;
+      records.push({kind:'shopping',title,category});
+      existing.add(title.toLocaleLowerCase(locale()));
+    }
+    await saveEntries(records);
+    editor.close();render();show(t('Guardado.'));return;
+  }
   if (type==='organize') {
     await saveOrganization(form,values);
     return;
@@ -580,6 +680,16 @@ async function submit(form) {
     entry_date:values.entry_date||null, entry_time:values.entry_time||null, amount:values.amount||null, assignee:values.assignee||null,
   };
   const id = form.dataset.id;
+  if(form.dataset.kind==='task') payload.points=Number(values.points||0);
+  if(form.dataset.kind==='expense') {
+    const weights=members.map(member=>[member.user_id,Number(values['share-'+member.user_id]||0)]);
+    const shares=values.split?splitCents(payload.amount,weights):null;
+    if(values.split&&(!shares||!payload.assignee)) throw new Error('Indica quién pagó y agrega al menos una parte.');
+    payload.expense_shares=shares?{weights:Object.fromEntries(weights),shares}:null;
+    const existing=entries.find(item=>item.id===id);
+    if(existing&&(Number(existing.amount)!==Number(payload.amount)||existing.assignee!==payload.assignee||
+      JSON.stringify(existing.expense_shares?.weights??null)!==JSON.stringify(payload.expense_shares?.weights??null))) payload.settled=false;
+  }
   if (id) await saveLocal('casa_entries','update',id,payload);
   else {
     const kind=form.dataset.kind;
@@ -721,6 +831,9 @@ document.addEventListener('change',event=>{
     }
     document.querySelector('#app-language')?.focus();
   }
+  if(el.id==='agenda-mode') {agendaWeek=el.value==='week';render();document.querySelector('#agenda-mode')?.focus();}
+  if(el.id==='agenda-person') {agendaPerson=el.value;render();document.querySelector('#agenda-person')?.focus();}
+  if(el.id==='agenda-kind') {agendaKind=el.value;render();document.querySelector('#agenda-kind')?.focus();}
   if(el.id==='board-select') {
     chosenBoard=el.value; render(); document.querySelector('#board-select')?.focus();
   }
@@ -761,9 +874,29 @@ document.addEventListener('click',event=>{
   if(d.view) go(d.view);
   if(d.mode) {mode=d.mode; notice=''; render();}
   if(d.new) openEditor(d.new);
+  if(d.settled) void run(button,async()=>{
+    const item=entries.find(i=>i.id===d.settled&&i.kind==='expense');
+    if(item){await saveLocal('casa_entries','update',item.id,{settled:!item.settled});render();}
+  });
+  if(d.pinNotice) void run(button,async()=>{
+    const item=entries.find(i=>i.id===d.pinNotice&&i.kind==='notice');
+    if(item) {await saveLocal('casa_entries','update',item.id,{done:!item.done});render();}
+  });
+  if(d.recipe) {const recipe=entries.find(item=>item.id===d.recipe); if(recipe){editor.innerHTML=recipeAction(recipe,dateKey(),escape);void showEditor();}}
   if(d.edit) {const entry=entries.find(i=>i.id===d.edit);if(entry) openEditor(entry.kind,entry);}
   if(d.day) {pickedDay=d.day; calendarMonth=fromKey(pickedDay);render();}
   if(d.month) {calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+Number(d.month),1,12);pickedDay=dateKey(calendarMonth);render();}
+  if(d.act==='calendarImport') {
+    editor.innerHTML='<h2>'+t('Importar ICS')+'</h2><form data-form="calendar-import"><p>'+t('Se importan eventos individuales. Las repeticiones se omiten.')+
+      '</p><label>ICS<input type="file" name="calendar" accept=".ics,text/calendar" required></label><p id="form-error" class="notice" role="alert"></p>'+
+      '<div class="actions"><button class="primary">'+t('Importar ICS')+'</button><button type="button" data-act="close">'+t('Cancelar')+'</button></div></form>';
+    void showEditor();
+  }
+  if(d.act==='calendarExport') {
+    const link=document.createElement('a');
+    const url=URL.createObjectURL(new Blob([writeCalendar(active('event'))],{type:'text/calendar;charset=utf-8'}));
+    link.href=url;link.download='casa-al-dia.ics';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
   if(d.act==='calendarToday') {pickedDay=dateKey();calendarMonth=fromKey(pickedDay);render();}
   if(d.act==='theme') {toggleTheme(); const control=button.querySelector('svg'); if(control) control.outerHTML=icon(currentTheme()==='dark'?'sun':'moon'); button.setAttribute('aria-label',currentTheme()==='dark'?t('Usar tema claro'):t('Usar tema oscuro'));}
   if(d.org) {

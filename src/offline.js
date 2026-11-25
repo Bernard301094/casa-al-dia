@@ -66,12 +66,16 @@ export async function readHome(user,home) {
 export async function putHome(user,home,data) {
   await cache.snapshots.put({user,home,data});
 }
-export async function enqueue({user,home,entity,action,recordId,payload,file,scope}) {
-  const identity=crypto.randomUUID();
+export async function enqueue(change) {
+  await enqueueMany([change],change.scope);
+}
+export async function enqueueMany(records,scope) {
   await cache.transaction('rw',cache.outbox,cache.drafts,cache.files,async()=>{
-    await cache.outbox.add({identity,user,home,entity,action,recordId,payload,file,created:new Date().toISOString()});
-    if (file) await putFile(user,home,file.path,file.blob);
-    if (scope) await clearDraft(user,scope);
+    for (const {scope:ignored,...change} of records) {
+      await cache.outbox.add({...change,identity:crypto.randomUUID(),created:new Date().toISOString()});
+      if (change.file) await putFile(change.user,change.home,change.file.path,change.file.blob);
+    }
+    if (scope && records.length) await clearDraft(records[0].user,scope);
   });
 }
 export async function createLocalHome(user,houseName,memberName) {

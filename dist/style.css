@@ -312,3 +312,7 @@ select option { background:var(--surface); color:var(--text); }
 input[type="number"] { appearance:textfield; }
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+
+.agenda-day { display:grid; gap:.45rem; margin-block:.85rem; }
+.recipe-check { display:flex; align-items:center; gap:.55rem; }
+fieldset { min-width:0; display:grid; gap:.55rem; border:1px solid var(--line); border-radius:12px; }
