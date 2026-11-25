@@ -29,7 +29,7 @@ export async function enablePush(user, db, announce) {
   if (previous && previous!==token) await db.rpc('casa_unregister_push',{device_token:previous});
   localStorage.setItem(deviceKey(user),token);
   unsubscribe?.();
-  unsubscribe = onMessage(instance,()=>announce(t('Tienes un recordatorio de rutinas.')));
+  unsubscribe = onMessage(instance,message=>announce(t(message.data?.kind==='deadline'?'Tienes un aviso de vencimiento.':'Tienes un recordatorio de rutinas.')));
 }
 export async function disablePush(user, db) {
   const token = localStorage.getItem(deviceKey(user));
@@ -45,5 +45,5 @@ export async function listenForPush(user, announce) {
   unsubscribe?.();
   unsubscribe=undefined;
   if (!pushConfigured || !pushEnabled(user) || !await isSupported()) return;
-  unsubscribe=onMessage(await client(),()=>announce(t('Tienes un recordatorio de rutinas.')));
+  unsubscribe=onMessage(await client(),message=>announce(t(message.data?.kind==='deadline'?'Tienes un aviso de vencimiento.':'Tienes un recordatorio de rutinas.')));
 }

@@ -1,4 +1,12 @@
 const portuguese = {
+  "Aviso push":"Notificação push",
+  "El mismo día":"No mesmo dia",
+  "Un día antes":"Um dia antes",
+  "Tres días antes":"Três dias antes",
+  "Siete días antes":"Sete dias antes",
+  "Si no eliges una hora, el aviso se programa a las 09:00.":"Se você não escolher um horário, o aviso será agendado para as 09:00.",
+  "Adjunto opcional de hasta 20 MB":"Anexo opcional de até 20 MB",
+  "Tienes un aviso de vencimiento.":"Você tem um aviso de vencimento.",
   "Puntos por tareas":"Pontos por tarefas",
   "Puntos al completar":"Pontos ao concluir",
   "Vencimientos": "Vencimentos",

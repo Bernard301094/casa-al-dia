@@ -45,23 +45,30 @@ Deno.serve(async request => {
       });
       return Response.json({validated:response.ok,provider_status:response.status},{status:response.ok?200:502});
     }
-    const {data: jobs,error} = await db.rpc("casa_claim_routine_push");
-    if (error) throw error;
+    type RoutineJob={token:string;routine_id:string;day:string};
+    type DeadlineJob={token:string;entry_id:string;send_at:string};
+    const [routine,deadline]=await Promise.all([db.rpc("casa_claim_routine_push"),db.rpc("casa_claim_deadline_push")]);
+    if (routine.error || deadline.error) throw routine.error || deadline.error;
+    const jobs:Array<RoutineJob|DeadlineJob>=[...routine.data,...deadline.data];
     let sent=0, failed=0;
     for (let offset=0; offset<jobs.length; offset+=10) {
-      await Promise.all(jobs.slice(offset,offset+10).map(async (job:{token:string;routine_id:string;day:string})=>{
+      await Promise.all(jobs.slice(offset,offset+10).map(async job=>{
+        const isDeadline="entry_id" in job;
         try {
           const response = await fetch(`https://fcm.googleapis.com/v1/projects/${account.project_id}/messages:send`,{
             method:"POST",headers:{Authorization:"Bearer "+access,"Content-Type":"application/json"},
             body:JSON.stringify({message:{
-              token:job.token,
-              webpush:{headers:{TTL:"300"},notification:{title:"Casa al Día",body:"Rutinas · Rotinas",
-                tag:job.routine_id+"-"+job.day},fcm_options:{link:"https://casa-al-dia-familiar.bernard30101994.chatgpt.site/"}},
+              token:job.token,data:{kind:isDeadline?"deadline":"routine"},
+              webpush:{headers:{TTL:"300"},notification:{title:"Casa al Día",body:isDeadline?"Vencimientos · Vencimentos":"Rutinas · Rotinas",
+                tag:isDeadline?job.entry_id+"-"+job.send_at:job.routine_id+"-"+job.day},fcm_options:{link:"https://casa-al-dia-familiar.bernard30101994.chatgpt.site/"}},
             }}),signal:AbortSignal.timeout(10000),
           });
           if (response.ok) {
-            const {error} = await db.from("casa_push_deliveries").update({sent_at:new Date().toISOString()})
-              .eq("token",job.token).eq("routine_id",job.routine_id).eq("day",job.day);
+            const delivery=db.from(isDeadline?"casa_deadline_deliveries":"casa_push_deliveries")
+              .update({sent_at:new Date().toISOString()}).eq("token",job.token);
+            const {error}=await (isDeadline
+              ? delivery.eq("entry_id",job.entry_id).eq("send_at",job.send_at)
+              : delivery.eq("routine_id",job.routine_id).eq("day",job.day));
             if (error) throw error;
             sent++;
           } else {

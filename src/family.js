@@ -8,9 +8,11 @@ export const moduleDetails = () => ({
   photo:[t('Galería'),'▧',t('archivo'),t('Comparte fotos y videos con tu hogar.')],
   document:[t('Documentos'),'▤',t('documento'),t('Sube y descarga archivos privados de tu hogar.')],
 });
+const documentFile={bucket:"casa-documents",accept:"application/pdf,text/plain,.docx,.xlsx,image/jpeg,image/png,image/webp"};
 export const fileKinds = {
   photo:{bucket:'casa-gallery',accept:'image/jpeg,image/png,image/webp,image/gif,image/avif,video/mp4,video/webm,video/quicktime'},
-  document:{bucket:'casa-documents',accept:'application/pdf,text/plain,.docx,.xlsx,image/jpeg,image/png,image/webp'},
+  document:documentFile,
+  deadline:documentFile,
 };
 export const monthKey = value => value.slice(0,7);
 export function nextBirthday(value, today) {

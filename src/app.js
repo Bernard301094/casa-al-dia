@@ -394,7 +394,12 @@ function openEditor(kind, entry) {
     '<label>'+(({shopping:t('Cantidad o detalles'),recipe:t('Ingredientes y preparación'),contact:t('Correo, dirección y notas')})[kind]||t('Detalles'))+'<textarea name="details" maxlength="4000" rows="3">'+escape(entry?.details)+'</textarea></label>'+
     (kind==='task'?'<label>'+t('Puntos al completar')+'<input type="number" name="points" min="0" max="100" step="1" value="'+escape(entry?.points??0)+'"></label>':'')+
     (kind==='expense'?expenseFields(entry,members,escape):'')+
-    (fileKinds[kind]&&!entry?'<label>'+t('Selecciona un archivo de hasta 20 MB')+'<input type="file" name="attachment" accept="'+fileKinds[kind].accept+'" required></label>':'')+
+    (kind==='deadline'?'<label>'+t('Aviso push')+'<select name="deadline_notice">'+opts([
+      ['',t('Sin aviso')],['0',t('El mismo día')],['1',t('Un día antes')],['3',t('Tres días antes')],['7',t('Siete días antes')],
+    ],String(entry?.deadline_notice??''))+'</select></label><small>'+t('Si no eliges una hora, el aviso se programa a las 09:00.')+'</small>':'')+
+    (fileKinds[kind]&&(!entry||(kind==='deadline'&&entry.author===session.user.id))?'<label>'+
+      t(kind==='deadline'?'Adjunto opcional de hasta 20 MB':'Selecciona un archivo de hasta 20 MB')+
+      '<input type="file" name="attachment" accept="'+fileKinds[kind].accept+'" '+(kind==='deadline'?'':'required')+'></label>':'')+
     '<p id="form-error" role="alert" class="notice"></p><div class="actions"><button class="primary">'+t('Guardar')+("</button><button type=\"button\" data-act=\"close\">"+t("Cancelar")+"</button>")+
     (entry?'<button type="button" class="danger" data-archive="'+entry.id+'">'+t('Archivar')+'</button>':'')+'</div></form>';
   void showEditor();
@@ -690,21 +695,19 @@ async function submit(form) {
     if(existing&&(Number(existing.amount)!==Number(payload.amount)||existing.assignee!==payload.assignee||
       JSON.stringify(existing.expense_shares?.weights??null)!==JSON.stringify(payload.expense_shares?.weights??null))) payload.settled=false;
   }
-  if (id) await saveLocal('casa_entries','update',id,payload);
-  else {
-    const kind=form.dataset.kind;
-    const file=form.querySelector('input[type=file]')?.files[0];
-    const recordId=crypto.randomUUID();
-    let attachment;
-    if (file) {
-      if (file.size>20971520) throw new Error('El archivo supera el límite de 20 MB.');
-      const extension=file.name.split('.').at(-1).replace(/[^a-z0-9]/gi,'').slice(0,10);
-      const path=household.id+'/'+session.user.id+'/'+recordId+(extension?'.'+extension:'');
-      attachment={bucket:fileKinds[kind].bucket,path,blob:file};
-      Object.assign(payload,{attachment_path:path,attachment_name:file.name});
-    }
-    await saveLocal('casa_entries','insert',recordId,{...payload,kind},attachment);
+  const kind=form.dataset.kind;
+  if (kind==='deadline') payload.deadline_notice=values.deadline_notice===''?null:Number(values.deadline_notice);
+  const recordId=id||crypto.randomUUID();
+  const file=form.querySelector('input[type=file]')?.files[0];
+  let attachment;
+  if (file) {
+    if(file.size>20971520) throw new Error('El archivo supera el límite de 20 MB.');
+    const extension=file.name.split('.').at(-1).replace(/[^a-z0-9]/gi,'').slice(0,10);
+    const path=household.id+'/'+session.user.id+'/'+crypto.randomUUID()+(extension?'.'+extension:'');
+    attachment={bucket:fileKinds[kind].bucket,path,blob:file};
+    Object.assign(payload,{attachment_path:path,attachment_name:file.name});
   }
+  await saveLocal('casa_entries',id?'update':'insert',recordId,id?payload:{...payload,kind},attachment);
   if (form.dataset.kind==='event' && payload.entry_date) {
     pickedDay=payload.entry_date; calendarMonth=fromKey(pickedDay);
   }
@@ -937,7 +940,7 @@ document.addEventListener('click',event=>{
       setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);
       return;
     }
-    const params=item.kind==='document'?{download:item.attachment_name}:{};
+    const params=item.kind!=='photo'?{download:item.attachment_name}:{};
     const owner=session.user.id,home=household.id;
     const {signedUrl}=await result(db.storage.from(fileKinds[item.kind].bucket).createSignedUrl(item.attachment_path,60,params));
     void fetch(signedUrl).then(response=>response.ok?response.blob():null)
