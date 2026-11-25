@@ -1,13 +1,13 @@
 import { animate } from 'motion';
-import { createElement, LayoutDashboard, CalendarDays, ListChecks, ShoppingBasket, Utensils, Wallet, StickyNote, MessagesSquare, PawPrint, UsersRound, Grid2X2, ListTodo, Activity, MapPin, CookingPot, ContactRound, Cake, Clock3, ChartPie, Images, FolderOpen, Plus, Moon, Sun, LogOut, ChevronRight, ChevronLeft } from 'lucide';
+import { createElement, LayoutDashboard, CalendarDays, ListChecks, ShoppingBasket, Utensils, Wallet, StickyNote, Kanban, Repeat2, Timer, Pin, PawPrint, UsersRound, Grid2X2, ListTodo, Activity, MapPin, CookingPot, ContactRound, Cake, Clock3, ChartPie, Images, FolderOpen, Plus, Moon, Sun, LogOut, ChevronRight, ChevronLeft } from 'lucide';
 
 const icons = {
  today:LayoutDashboard, event:CalendarDays, task:ListChecks, shopping:ShoppingBasket,
- meal:Utensils, expense:Wallet, note:StickyNote, message:MessagesSquare, pet:PawPrint,
+ meal:Utensils, expense:Wallet, note:StickyNote, pet:PawPrint,
  family:UsersRound, more:Grid2X2, lists:ListTodo, activity:Activity, location:MapPin,
  recipe:CookingPot, contact:ContactRound, birthday:Cake, schedule:Clock3, budget:ChartPie,
  photo:Images, document:FolderOpen, plus:Plus, moon:Moon, sun:Sun, signout:LogOut,
- chevron:ChevronRight, calendar:CalendarDays, board:LayoutDashboard, deadline:Clock3, notice:StickyNote, routine:Clock3, left:ChevronLeft, right:ChevronRight,
+ chevron:ChevronRight, calendar:CalendarDays, board:Kanban, deadline:Timer, notice:Pin, routine:Repeat2, left:ChevronLeft, right:ChevronRight,
 };
 
 export function icon(name, className = '') {

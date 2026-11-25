@@ -16,6 +16,7 @@ import { url, key } from './config.js';
 import { moduleDetails, fileKinds, nextBirthday, daysUntil, monthKey, memberLocation } from './family.js';
 
 const android = globalThis.CasaAndroid;
+const deviceCalendar = typeof android?.addCalendarEvent === 'function';
 const returnUrl = new URL(location.href);
 const fragment = new URLSearchParams(returnUrl.hash.slice(1));
 const oauthError = returnUrl.searchParams.get('error') ?? fragment.get('error');
@@ -66,7 +67,7 @@ let boards=[], boardCards=[], listTemplates=[], chosenBoard;
 const organizationTables={board:'casa_boards',card:'casa_board_cards',template:'casa_list_templates'};
 const activeBoard = () => boards.find(board=>board.id===chosenBoard)??boards[0];
 let routines = [], routineDays = [];
-let view = 'today', filter = '', status = 'all', mode = 'login', notice = oauthError ? t(oauthError==='access_denied'
+let view = 'today', filter = '', status = 'all', categoryFilter = '', mode = 'login', notice = oauthError ? t(oauthError==='access_denied'
   ? 'Se canceló el acceso con Google.' : 'No se pudo completar el acceso. Inténtalo de nuevo.') : '';
 let syncTask;
 let syncStatus={count:0,failed:false};
@@ -181,7 +182,7 @@ function authScreen() {
     (reset?'':login?("<button data-mode=\"signup\">"+t("Crear cuenta")+"</button><button data-mode=\"forgot\">"+t("Olvidé mi contraseña")+"</button>"):("<button data-mode=\"login\">"+t("Volver a iniciar sesión")+"</button>"))+
     '</section></div></div>';
 }
-function go(next) { view = next; filter = ''; status = 'all'; notice = ''; render(); window.scrollTo(0,0); animateEntry(app.querySelector('main')); }
+function go(next) { view = next; filter = ''; status = 'all'; categoryFilter = ''; notice = ''; render(); window.scrollTo(0,0); animateEntry(app.querySelector('main')); }
 function navigation(keys, css) {
   const current = !keys.includes(view) ? 'more' : view;
   return '<nav class="'+css+'" aria-label="'+t('Navegación')+'">' +keys.map(k =>
@@ -282,11 +283,53 @@ const exploreGroups = [
   ['En familia',['recipe','meal','photo','document','notice','activity','location']],
   ['Hogar',['budget','expense','note','pet']],
 ];
-function exploreTile(kind) {
-  return '<button class="module-tile tone-'+kind+'" data-view="'+kind+'"><span class="module-icon">'+icon(kind)+'</span><strong>'+modules[kind][0]+'</strong>'+icon('chevron','tile-chevron')+'</button>';
+function moduleCount(kind) {
+  if(kind==='family') return members.length;
+  if(kind==='lists') return new Set(entries.filter(item=>!item.archived&&['task','shopping'].includes(item.kind))
+    .map(item=>JSON.stringify([item.kind,item.category||'']))).size;
+  if(kind==='board') return boards.length;
+  if(kind==='routine') return routines.length;
+  if(kind==='activity') return activity.length;
+  return active(kind).length;
 }
+function exploreTile(kind) {
+  const title=modules[kind][0];
+  const description=descriptions[kind]||t(exploreDescriptions[kind]||'');
+  return '<button class="module-tile tone-'+kind+'" data-view="'+kind+'" data-explore-item="'+escape(title+' '+description)+'">'+
+    '<span class="module-icon">'+icon(kind)+'</span><span class="module-tile-content"><strong>'+title+'</strong><small>'+description+
+    '</small></span><span class="module-count">'+new Intl.NumberFormat(locale()).format(moduleCount(kind))+'</span></button>';
+}
+const exploreDescriptions = {
+  lists:'Compras y pendientes compartidos.', board:'Tableros para organizar proyectos.',
+  routine:'Hábitos y turnos de la familia.', activity:'Cambios recientes del hogar.',
+  location:'Ubicaciones compartidas por tu familia.', family:'Integrantes e invitaciones del hogar.',
+};
 function more() {
-  return exploreGroups.map(([label,kinds])=>'<section class="panel explore-section"><h2>'+t(label)+'</h2><div class="module-grid">'+kinds.map(exploreTile).join('')+'</div></section>').join('');
+  return '<input id="explore-search" type="search" aria-label="'+t('Buscar herramientas')+'" placeholder="'+t('Buscar herramientas')+'">'+
+    '<p id="explore-empty" class="muted" hidden>'+t('No encontramos coincidencias.')+'</p>'+
+    exploreGroups.map(([label,kinds])=>'<section class="panel explore-section"><h2>'+t(label)+'</h2><div class="module-grid">'+kinds.map(exploreTile).join('')+'</div></section>').join('');
+}
+function moduleOverview(kind) {
+  const records=active(kind);
+  const categories=new Set(records.map(item=>item.category).filter(Boolean));
+  const today=dateKey();
+  const nextDate=records.filter(item=>item.entry_date)
+    .map(item=>kind==='birthday'?nextBirthday(item.entry_date,today):item.entry_date)
+    .filter(date=>date>=today).sort()[0];
+  return '<section class="panel tool-overview tone-'+kind+'"><span class="module-icon">'+icon(kind)+'</span><div><p>'+descriptions[kind]+
+    '</p><div class="meta"><span class="pill">'+plural(records.length,'{count} registro','{count} registros')+'</span>'+
+    (categories.size?'<span class="pill">'+plural(categories.size,'{count} categoría','{count} categorías')+'</span>':'')+
+    (nextDate?'<span class="pill">'+t('Próxima fecha')+' · '+dateLabel(nextDate)+'</span>':'')+'</div></div></section>';
+}
+function sendToCalendar(entry) {
+  const allDay=!entry.entry_time;
+  const start=new Date(entry.entry_date+'T'+(entry.entry_time||'00:00'));
+  const end=new Date(start);
+  if(allDay) end.setDate(end.getDate()+1);
+  else end.setTime(start.getTime()+3600000);
+  if(!Number.isFinite(start.getTime())) return;
+  android.addCalendarEvent(entry.title,entry.details||'',start.getTime(),end.getTime(),allDay,
+    t('Elige dónde guardar el evento'),t('No hay un calendario compatible. Puedes exportar el archivo ICS.'));
 }
 function pointsPanel() {
   const totals=new Map();
@@ -351,6 +394,7 @@ function agendaRows() {
     return '<section class="agenda-day"><h3>'+dateLabel(day,{weekday:'long',day:'numeric',month:'long'})+'</h3>'+
       (data.length?data.map(item=>'<div class="row"><small>'+modules[item.kind][0]+'</small><strong class="grow">'+escape(item.title)+'</strong>'+
         '<span>'+escape(item.entry_time?.slice(0,5))+'</span>'+
+        (deviceCalendar&&item.kind==='event'?'<button data-device-event="'+item.id+'">'+icon('event')+t('Guardar en mi calendario')+'</button>':'')+
         (item.kind==='routine'?'<button data-view="routine">'+t('Ver rutinas')+'</button>':'<button data-edit="'+item.id+'">'+t('Editar')+'</button>')+'</div>').join(''):
         '<p class="muted">'+t('Aún no hay registros.')+'</p>')+'</section>';
   }).join('');
@@ -377,18 +421,22 @@ function calendar() {
 }
 function filtered(kind) {
   const q = filter.trim().toLocaleLowerCase(locale());
-  return active(kind).filter(i=>(view!=='event'||i.entry_date===pickedDay)&&(!q||[i.title,i.details,i.category].some(v=>v.toLocaleLowerCase(locale()).includes(q)))&&(status==='all'||i.done===(status==='done')));
+  return active(kind).filter(i=>(view!=='event'||i.entry_date===pickedDay)&&(!q||[i.title,i.details,i.category].some(v=>v?.toLocaleLowerCase(locale()).includes(q)))&&(!categoryFilter||i.category===categoryFilter)&&(status==='all'||i.done===(status==='done')));
 }
 function listing(kind) {
   const month = dateKey().slice(0,7);
+  const categories=kind==='event'?[]:[...new Set(active(kind).map(item=>item.category).filter(Boolean))]
+    .sort((a,b)=>a.localeCompare(b,locale()));
   const total = active('expense').filter(i=>i.entry_date.startsWith(month)).reduce((sum,i)=>sum+Number(i.amount),0);
-  return '<p class="muted">'+descriptions[kind]+'</p>'+
+  return moduleOverview(kind)+
     (kind==='deadline'?'<section class="hero"><h2>'+t('Próximos 7 días y vencidos')+'</h2>'+
       '<p>'+active('deadline').filter(item=>!item.done&&item.entry_date<=shiftDate(dateKey(),7)).length+'</p></section>':'')+
-    (kind==='event'?calendar()+'<section class="panel"><div class="filters"><label>'+t('Vista')+'<select id="agenda-mode">'+opts([['day',t('Día')],['week',t('Semana')]],agendaWeek?'week':'day')+'</select></label><label>'+t('Tipo')+'<select id="agenda-kind">'+opts([['all',t('Todos')],...agendaKinds.map(k=>[k,modules[k][0]])],agendaKind)+'</select></label><label>'+t('Responsable')+'<select id="agenda-person">'+opts([['all',t('Todos')],...members.map(m=>[m.user_id,m.name])],agendaPerson)+'</select></label></div><div class="actions"><button data-act="calendarImport">'+t('Importar ICS')+'</button><button data-act="calendarExport">'+t('Exportar ICS')+'</button><button data-act="scanEvent">'+t('Foto o PDF')+'</button><button data-act="calendarFeed">'+t('Suscribir mi calendario')+'</button><button data-act="googleCalendar">Google Calendar</button></div></section>':kind==='budget'?budgetSummary():kind==='expense'?("<section class=\"hero\"><small>"+t("Gastos registrados en "))+dateLabel(dateKey(),{month:'long'})+'</small><h2>'+money(total)+'</h2></section>':'')+
+    (kind==='event'?calendar()+'<section class="panel"><div class="filters"><label>'+t('Vista')+'<select id="agenda-mode">'+opts([['day',t('Día')],['week',t('Semana')]],agendaWeek?'week':'day')+'</select></label><label>'+t('Tipo')+'<select id="agenda-kind">'+opts([['all',t('Todos')],...agendaKinds.map(k=>[k,modules[k][0]])],agendaKind)+'</select></label><label>'+t('Responsable')+'<select id="agenda-person">'+opts([['all',t('Todos')],...members.map(m=>[m.user_id,m.name])],agendaPerson)+'</select></label></div><div class="actions"><button data-act="calendarImport">'+t('Importar ICS')+'</button><button data-act="calendarExport">'+t('Exportar ICS')+'</button><button data-act="scanEvent">'+t('Foto o PDF')+'</button><button data-act="calendarFeed">'+t('Suscribir mi calendario')+'</button>'+(android?'':'<button data-act="googleCalendar">'+t('Importar desde Google Calendar')+'</button>')+'</div></section>':kind==='budget'?budgetSummary():kind==='expense'?("<section class=\"hero\"><small>"+t("Gastos registrados en "))+dateLabel(dateKey(),{month:'long'})+'</small><h2>'+money(total)+'</h2></section>':'')+
     '<section class="panel"><div class="top"><h2>'+(kind==='event'?dateLabel(pickedDay,{weekday:'long',day:'numeric',month:'long'}):t('Registros'))+'</h2></div>'+
     ("<div class=\"filters\"><input id=\"search\" type=\"search\" aria-label=\""+t("Buscar")+"\" placeholder=\""+t("Buscar…")+"\" value=\"")+escape(filter)+'">'+
     (['task','shopping','pet','deadline'].includes(kind)?("<select id=\"status\" aria-label=\""+t("Estado")+"\">")+opts([['all',t('Todos')],['open',t('Pendientes')],['done',t('Completados')]],status)+'</select>':'')+
+    (categories.length?'<select id="record-category" aria-label="'+t('Categoría')+'">'+
+      opts([['',t('Todas las categorías')],...categories.map(category=>[category,category])],categoryFilter)+'</select>':'')+
     '</div><div id="results">'+results(kind)+'</div></section>';
 }
 function results(kind) {
@@ -398,7 +446,7 @@ function results(kind) {
   if(kind==='birthday') data.sort((a,b)=>nextBirthday(a.entry_date,dateKey()).localeCompare(nextBirthday(b.entry_date,dateKey())));
   if(kind==='schedule') data.sort(byDate);
   if (['event','task','meal','pet','deadline'].includes(kind)) data.sort(byDate);
-  return data.length ? data.map(row).join('') : emptyState(kind,filter?t('No encontramos coincidencias.'):t('Aún no hay registros.'),filter?'':t('Agregar ')+modules[kind][2]);
+  return data.length ? data.map(row).join('') : emptyState(kind,(filter||categoryFilter||status!=='all')?t('No encontramos coincidencias.'):t('Aún no hay registros.'),(filter||categoryFilter||status!=='all')?'':t('Agregar ')+modules[kind][2]);
 }
 function row(i) {
   const member = members.find(m=>m.user_id===i.assignee);
@@ -438,7 +486,8 @@ function openEditor(kind, entry, source='') {
     (fileKinds[kind]&&(!entry||(kind==='deadline'&&entry.author===session.user.id))?'<label>'+
       t(kind==='deadline'?'Adjunto opcional de hasta 20 MB':'Selecciona un archivo de hasta 20 MB')+
       '<input type="file" name="attachment" accept="'+fileKinds[kind].accept+'" '+(kind==='deadline'?'':'required')+'></label>':'')+
-    '<p id="form-error" role="alert" class="notice"></p><div class="actions"><button class="primary">'+t('Guardar')+("</button><button type=\"button\" data-act=\"close\">"+t("Cancelar")+"</button>")+
+    (deviceCalendar&&kind==='event'&&!entry?'<label class="recipe-check"><input type="checkbox" name="device_calendar">'+t('Abrir mi calendario después de guardar')+'</label>':'')+
+    '<p id="form-error" role="alert class="notice"></p><div class="actions"><button class="primary">'+t('Guardar')+("</button><button type=\"button\" data-act=\"close\">"+t("Cancelar")+"</button>")+
     (entry?'<button type="button" class="danger" data-archive="'+entry.id+'">'+t('Archivar')+'</button>':'')+'</div></form>';
   void showEditor();
 }
@@ -807,6 +856,7 @@ async function submit(form) {
     pickedDay=payload.entry_date; calendarMonth=fromKey(pickedDay);
   }
   editor.close(); render(); show(t('Guardado.'));
+  if(deviceCalendar&&kind==='event'&&!id&&values.device_calendar) sendToCalendar(payload);
 }
 async function saveOrganization(form,values) {
   const {type,id}=form.dataset;
@@ -905,6 +955,22 @@ function persistEditor(event) {
 }
 document.addEventListener('change',persistEditor);
 document.addEventListener('input',event=>{
+  if(event.target.id==='explore-search') {
+    const normalize=value=>value.toLocaleLowerCase(locale()).normalize('NFD').replace(/\p{M}/gu,'');
+    const query=normalize(event.target.value.trim());
+    let matches=0;
+    for(const section of document.querySelectorAll('.explore-section')) {
+      let visible=false;
+      for(const tile of section.querySelectorAll('[data-explore-item]')) {
+        tile.hidden=!normalize(tile.dataset.exploreItem).includes(query);
+        visible ||= !tile.hidden;
+        matches+=Number(!tile.hidden);
+      }
+      section.hidden=!visible;
+    }
+    document.querySelector('#explore-empty').hidden=matches>0;
+    return;
+  }
   persistEditor(event);
   if(event.target.id==='search') {filter=event.target.value; document.querySelector('#results').innerHTML=results(view);}
 });
@@ -954,6 +1020,7 @@ document.addEventListener('change',event=>{
       document.querySelector('#routine-date')?.focus();
     });
   }
+  if(el.id==='record-category') {categoryFilter=el.value; document.querySelector('#results').innerHTML=results(view);}
   if(el.id==='status') {status=el.value; document.querySelector('#results').innerHTML=results(view);}
   if(el.id==='homes'||el.id==='mobile-homes') void run(el,async()=>{await selectHouse(homes.find(h=>h.id===el.value));go('today');});
   if(el.dataset.check) {
@@ -969,6 +1036,10 @@ document.addEventListener('click',event=>{
   const button=event.target.closest('button');
   if(!button || busy) return;
   const d=button.dataset;
+  if(d.deviceEvent&&deviceCalendar) {
+    const item=active('event').find(item=>item.id===d.deviceEvent);
+    if(item) sendToCalendar(item);
+  }
   if(d.view) go(d.view);
   if(d.mode) {mode=d.mode; notice=''; render();}
   if(d.new) openEditor(d.new);
@@ -1115,7 +1186,7 @@ document.addEventListener('click',event=>{
   if(d.act==='logout') void run(button,async()=>{await disablePush(session.user.id,db);await result(db.auth.signOut());localStorage.removeItem(lastSessionKey);sessionStorage.removeItem('casa-calendar-user');googleEvents=[];mode='login';notice='';await handleSession(null);});
   if(d.act==='invite') void run(button,async()=>{
     const code=await result(db.rpc('casa_create_invite',{h:household.id}));
-    const link=new URL(android ? '/' : baseUrl(),location.origin);link.searchParams.set('invitar',code);
+    const link=new URL(android ? 'https://casa-al-dia-plum.vercel.app/' : baseUrl());link.searchParams.set('invitar',code);
     currentInviteLink=link.href; document.querySelector('#invite-link').innerHTML=inviteMarkup();
   });
   if(d.act==='copy') void run(button,async()=>{await navigator.clipboard.writeText(document.querySelector('#invite-link input').value);show(t('Enlace copiado.'));});

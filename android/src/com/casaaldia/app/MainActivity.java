@@ -2,11 +2,16 @@ package com.casaaldia.app;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ComponentName;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.net.Uri;
 import android.os.Bundle;
+import android.provider.CalendarContract;
+import android.provider.CalendarContract.Events;
 import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
@@ -16,6 +21,10 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.Collections;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -46,7 +55,7 @@ public final class MainActivity extends Activity {
         web.getSettings().setDomStorageEnabled(true);
         web.getSettings().setAllowFileAccess(false);
         web.getSettings().setAllowContentAccess(false);
-        web.addJavascriptInterface(new LocalFiles(), "CasaAndroid");
+        web.addJavascriptInterface(new AppBridge(), "CasaAndroid");
         web.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 Uri url = request.getUrl();
@@ -167,7 +176,17 @@ public final class MainActivity extends Activity {
         return true;
     }
 
-    private final class LocalFiles {
+    private final class AppBridge {
+        @JavascriptInterface public void addCalendarEvent(String title, String details, long start,
+                long end, boolean allDay, String chooserTitle, String unavailable) {
+            if (title == null || title.trim().isEmpty() || start >= end) return;
+            runOnUiThread(new Runnable() {
+                @Override public void run() {
+                    openCalendar(title, details, start, end, allDay, chooserTitle, unavailable);
+                }
+            });
+        }
+
         @JavascriptInterface public void save(String filename, String mime, String base64) {
             if (base64.length() > 30 * 1024 * 1024) return;
             byte[] bytes;
@@ -176,6 +195,47 @@ public final class MainActivity extends Activity {
             runOnUiThread(new Runnable() {
                 @Override public void run() { chooseDownload(filename, mime, bytes); }
             });
+        }
+    }
+
+    private void openCalendar(String title, String details, long start, long end,
+            boolean allDay, String chooserTitle, String unavailable) {
+        Intent event = new Intent(Intent.ACTION_INSERT, Events.CONTENT_URI)
+            .putExtra(Events.TITLE, title)
+            .putExtra(Events.DESCRIPTION, details)
+            .putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY, allDay)
+            .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, start)
+            .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, end);
+        Map<String, Intent> targets = new LinkedHashMap<>();
+        List<CharSequence> labels = new ArrayList<>();
+        for (Intent candidate : new Intent[]{event, new Intent(event).setType("vnd.android.cursor.dir/event")}) {
+            for (ResolveInfo match : getPackageManager().queryIntentActivities(candidate, PackageManager.MATCH_DEFAULT_ONLY)) {
+                String packageName = match.activityInfo.packageName;
+                if (targets.containsKey(packageName)) continue;
+                labels.add(match.activityInfo.applicationInfo.loadLabel(getPackageManager()));
+                targets.put(packageName, new Intent(candidate)
+                    .setComponent(new ComponentName(packageName, match.activityInfo.name)));
+            }
+        }
+        List<Intent> choices = new ArrayList<>(targets.values());
+        if (choices.isEmpty()) {
+            Toast.makeText(this, unavailable, Toast.LENGTH_LONG).show();
+        } else if (choices.size() == 1) {
+            launchCalendar(choices.get(0), unavailable);
+        } else {
+            new AlertDialog.Builder(this).setTitle(chooserTitle)
+                .setItems(labels.toArray(new CharSequence[0]), new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface dialog, int index) {
+                        launchCalendar(choices.get(index), unavailable);
+                    }
+                }).show();
+        }
+    }
+
+    private void launchCalendar(Intent intent, String unavailable) {
+        try { startActivity(intent); }
+        catch (ActivityNotFoundException | SecurityException error) {
+            Toast.makeText(this, unavailable, Toast.LENGTH_LONG).show();
         }
     }
 
