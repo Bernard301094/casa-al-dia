@@ -29,3 +29,7 @@ En **Explorar → Rutinas**, crea una repetición diaria o semanal. Puedes escog
 La configuración pública de Firebase vive en `dist/firebase-config.js`. La app registra los dispositivos desde **Mi familia → Avisos push** y permite revocarlos. Firebase muestra un aviso genérico para mantener los detalles familiares fuera de la pantalla bloqueada. Supabase selecciona los turnos pendientes según el responsable, las excepciones y la zona horaria registrada por el dispositivo.
 
 Para habilitar el envío, guarda en los secretos de Edge Functions el JSON de una cuenta de servicio con permiso para enviar mensajes al proyecto Firebase bajo `FCM_SERVICE_ACCOUNT_JSON`. La migración `20261125000700_push_scheduler_auth.sql` genera automáticamente el secreto que el programador y la Edge Function usan para autenticarse. Ejecuta `supabase/schedule-routine-push.sql` para activar la comprobación de recordatorios cada minuto. El SQL no contiene credenciales.
+
+## Kanban y listas reutilizables
+
+En **Explorar → Kanban**, crea tableros y organiza sus tarjetas por estado. Cada tarjeta admite responsable, fecha de entrega y detalles. Puedes moverla con el selector de estado o arrastrarla en computadora. En **Listas → Listas reutilizables**, crea plantillas de compras o tareas y cópialas a una lista nueva. Cada copia comienza pendiente y se puede modificar independientemente.

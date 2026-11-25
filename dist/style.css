@@ -219,3 +219,13 @@ dialog .actions { flex-wrap:wrap }
 }
 #routine-notice:empty { display:none; }
 .routine-occurrence { padding-block:1rem; border-top:1px solid var(--line); }
+
+.kanban { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1rem; }
+.kanban-column { align-self:start; background:var(--soft); }
+.kanban-column h2 small { font-size:.85rem; font-weight:600; }
+.kanban-card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:.65rem; display:grid; gap:.45rem; min-width:0; }
+.kanban-title { text-align:start; justify-content:flex-start; padding:.2rem; overflow-wrap:anywhere; min-width:0; }
+.kanban-card small:empty { display:none; }
+@media(max-width:800px) {
+  .kanban { grid-template-columns:1fr; gap:.7rem; }
+}
