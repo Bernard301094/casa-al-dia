@@ -101,6 +101,8 @@ async function result(request) {
 }
 function errorText(error) {
   const msg = error.message || '';
+  if (['Selecciona una foto o PDF de hasta 10 MB.','No se encontró texto legible en el documento.',
+    'No se pudo leer el documento. Prueba con una imagen más clara o revisa la conexión.'].includes(msg)) return t(msg);
   if (['Elige una fecha o algún ingrediente.','Selecciona un archivo ICS de hasta 2 MB.',
     'El archivo ICS no es válido.','El archivo supera 500 eventos.',
     'No hay eventos nuevos compatibles en el archivo.','Indica quién pagó y agrega al menos una parte.'].includes(msg)) return t(msg);
@@ -348,7 +350,7 @@ function listing(kind) {
   return '<p class="muted">'+descriptions[kind]+'</p>'+
     (kind==='deadline'?'<section class="hero"><h2>'+t('Próximos 7 días y vencidos')+'</h2>'+
       '<p>'+active('deadline').filter(item=>!item.done&&item.entry_date<=shiftDate(dateKey(),7)).length+'</p></section>':'')+
-    (kind==='event'?calendar()+'<section class="panel"><div class="filters"><label>'+t('Vista')+'<select id="agenda-mode">'+opts([['day',t('Día')],['week',t('Semana')]],agendaWeek?'week':'day')+'</select></label><label>'+t('Tipo')+'<select id="agenda-kind">'+opts([['all',t('Todos')],...agendaKinds.map(k=>[k,modules[k][0]])],agendaKind)+'</select></label><label>'+t('Responsable')+'<select id="agenda-person">'+opts([['all',t('Todos')],...members.map(m=>[m.user_id,m.name])],agendaPerson)+'</select></label></div><div class="actions"><button data-act="calendarImport">'+t('Importar ICS')+'</button><button data-act="calendarExport">'+t('Exportar ICS')+'</button></div></section>':kind==='budget'?budgetSummary():kind==='expense'?("<section class=\"hero\"><small>"+t("Gastos registrados en "))+dateLabel(dateKey(),{month:'long'})+'</small><h2>'+money(total)+'</h2></section>':'')+
+    (kind==='event'?calendar()+'<section class="panel"><div class="filters"><label>'+t('Vista')+'<select id="agenda-mode">'+opts([['day',t('Día')],['week',t('Semana')]],agendaWeek?'week':'day')+'</select></label><label>'+t('Tipo')+'<select id="agenda-kind">'+opts([['all',t('Todos')],...agendaKinds.map(k=>[k,modules[k][0]])],agendaKind)+'</select></label><label>'+t('Responsable')+'<select id="agenda-person">'+opts([['all',t('Todos')],...members.map(m=>[m.user_id,m.name])],agendaPerson)+'</select></label></div><div class="actions"><button data-act="calendarImport">'+t('Importar ICS')+'</button><button data-act="calendarExport">'+t('Exportar ICS')+'</button><button data-act="scanEvent">'+t('Foto o PDF')+'</button></div></section>':kind==='budget'?budgetSummary():kind==='expense'?("<section class=\"hero\"><small>"+t("Gastos registrados en "))+dateLabel(dateKey(),{month:'long'})+'</small><h2>'+money(total)+'</h2></section>':'')+
     '<section class="panel"><div class="top"><h2>'+(kind==='event'?dateLabel(pickedDay,{weekday:'long',day:'numeric',month:'long'}):t('Registros'))+'</h2></div>'+
     ("<div class=\"filters\"><input id=\"search\" type=\"search\" aria-label=\""+t("Buscar")+"\" placeholder=\""+t("Buscar…")+"\" value=\"")+escape(filter)+'">'+
     (['task','shopping','pet','deadline'].includes(kind)?("<select id=\"status\" aria-label=\""+t("Estado")+"\">")+opts([['all',t('Todos')],['open',t('Pendientes')],['done',t('Completados')]],status)+'</select>':'')+
@@ -379,13 +381,14 @@ function row(i) {
     (i.kind==='recipe'?'<button data-recipe="'+i.id+'">'+t('Usar receta')+'</button>':'')+
     '<div class="actions"><button data-edit="'+i.id+'" aria-label="'+escape(t('Editar {title}',{title:i.title}))+'">'+t('Editar')+'</button></div>'+'</article>';
 }
-function openEditor(kind, entry) {
+function openEditor(kind, entry, source='') {
   const hasDate = ['event','task','meal','expense','pet','birthday','schedule','budget','deadline'].includes(kind);
   const required = ['event','meal','expense','birthday','schedule','budget','deadline'].includes(kind);
   const assignee = ['event','task','pet','schedule','deadline','expense'].includes(kind);
-  const dateValue = entry ? entry.entry_date : kind==='event'?pickedDay:required?dateKey():'';
+  const dateValue = entry ? entry.entry_date : source==='scan'?'':kind==='event'?pickedDay:required?dateKey():'';
   const category = ({shopping:t('Nombre de la lista'),task:t('Nombre de la lista'),meal:t('Momento del día'),expense:t('Categoría'),budget:t('Categoría'),deadline:t('Categoría'),contact:t('Teléfono'),pet:t('Mascota')})[kind];
-  editor.innerHTML = '<h2>'+(entry?t('Editar '):t('Agregar '))+modules[kind][2]+'</h2><form data-form="entry" data-kind="'+kind+'" data-id="'+(entry?.id??'')+'">'+
+  editor.innerHTML = '<h2>'+(source==='scan'?t('Revisar borrador'):(entry?t('Editar '):t('Agregar '))+modules[kind][2])+'</h2><form data-form="entry" data-kind="'+kind+'" data-source="'+source+'" data-id="'+(entry?.id??'')+'">'+
+    (source==='scan'?'<p class="muted">'+t('Revisa el título, la fecha y la hora antes de guardar.')+'</p>':'')+
     '<label>'+(kind==='shopping'?t('Producto'):t('Título'))+'<input name="title" maxlength="160" value="'+escape(entry?.title)+'" required></label>'+
     (category?'<label>'+category+'<input name="category" maxlength="80" value="'+escape(entry?.category)+'"></label>':'')+
     (hasDate?'<div class="split"><label>'+t('Fecha')+'<input name="entry_date" type="date" value="'+escape(dateValue)+'" '+(required?'required':'')+'></label>'+
@@ -516,8 +519,8 @@ async function synchronize() {
 }
 function syncSoon() { void synchronize().catch(showError); }
 function draftScope(form) {
-  if (!household || !form || ['auth','house','join'].includes(form.dataset.form)) return '';
-  return [household.id,form.dataset.form,form.dataset.type,form.dataset.kind,form.dataset.id,form.dataset.board].join(':');
+  if (!household || !form || ['auth','house','join','scan-event'].includes(form.dataset.form)) return '';
+  return [household.id,form.dataset.form,form.dataset.type,form.dataset.kind,form.dataset.id,form.dataset.board].join(':')+(form.dataset.source?':'+form.dataset.source:'');
 }
 async function showEditor() {
   const form=editor.querySelector('form');
@@ -593,6 +596,27 @@ async function handleSession(next) {
 async function submit(form) {
   const values=Object.fromEntries(new FormData(form));
   const type=form.dataset.form;
+  if (type==='scan-event') {
+    const file=values.source_file;
+    if (!file?.size || file.size>10000000) throw new Error('Selecciona una foto o PDF de hasta 10 MB.');
+    editor.querySelector('#form-error').textContent=t('Leyendo el documento…');
+    let extracted,suggest;
+    try {
+      const reader=await import(new URL('document-reader/index.js?v=1',baseUrl()).href);
+      extracted=await reader.extractDocument(file);
+      suggest=reader.suggestEvent;
+    } catch {
+      throw new Error('No se pudo leer el documento. Prueba con una imagen más clara o revisa la conexión.');
+    }
+    if (!extracted.text.trim()) throw new Error('No se encontró texto legible en el documento.');
+    const draft=suggest(extracted.text);
+    const scope=household.id+':entry::event:::scan';
+    await putDraft(session.user.id,scope,draft);
+    editor.close();
+    openEditor('event',undefined,'scan');
+    if(extracted.truncated) editor.querySelector('#form-error').textContent=t('Se leyeron las primeras tres páginas.');
+    return;
+  }
   if (type==='calendar-import') {
     const file=values.calendar;
     if (!file?.size || file.size>2000000) throw new Error('Selecciona un archivo ICS de hasta 2 MB.');
@@ -889,6 +913,16 @@ document.addEventListener('click',event=>{
   if(d.edit) {const entry=entries.find(i=>i.id===d.edit);if(entry) openEditor(entry.kind,entry);}
   if(d.day) {pickedDay=d.day; calendarMonth=fromKey(pickedDay);render();}
   if(d.month) {calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+Number(d.month),1,12);pickedDay=dateKey(calendarMonth);render();}
+  if(d.act==='scanEvent') void run(button,async()=>{
+    const draft=await getDraft(session.user.id,household.id+':entry::event:::scan');
+    editor.innerHTML='<h2>'+t('Foto o PDF')+'</h2><form data-form="scan-event"><p>'+t('El documento se procesa en este dispositivo. Se leen hasta tres páginas del PDF.')+'</p>'+
+      '<label>'+t('Selecciona una foto o PDF de hasta 10 MB.')+'<input type="file" name="source_file" accept="image/jpeg,image/png,image/webp,application/pdf,.pdf" required></label>'+
+      '<p id="form-error" class="notice" role="status"></p><div class="actions"><button class="primary">'+t('Extraer texto')+'</button>'+
+      (draft?'<button type="button" data-act="resumeScan">'+t('Retomar borrador')+'</button>':'')+
+      '<button type="button" data-act="close">'+t('Cancelar')+'</button></div></form>';
+    void showEditor();
+  });
+  if(d.act==='resumeScan') {editor.close();openEditor('event',undefined,'scan');}
   if(d.act==='calendarImport') {
     editor.innerHTML='<h2>'+t('Importar ICS')+'</h2><form data-form="calendar-import"><p>'+t('Se importan eventos individuales. Las repeticiones se omiten.')+
       '</p><label>ICS<input type="file" name="calendar" accept=".ics,text/calendar" required></label><p id="form-error" class="notice" role="alert"></p>'+
