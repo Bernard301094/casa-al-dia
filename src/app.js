@@ -1,3 +1,4 @@
+import { connectCalendar, readGoogleEvents } from './google-calendar.js';
 import { readCalendar, writeCalendar } from './calendar-files.js';
 import { shiftDate, ingredients, recipeAction, splitCents, expenseFields } from './planning.js';
 import { syncDateFields } from './date-picker.js';
@@ -24,6 +25,7 @@ const db = createClient(url, key, {global:{fetch:(input,init={})=>{
 const app = document.querySelector('#app');
 const editor = document.querySelector('#editor');
 let modules, descriptions;
+let googleEvents=[];
 function localizeModules() {
   const extras = moduleDetails();
   modules = {
@@ -350,7 +352,7 @@ function listing(kind) {
   return '<p class="muted">'+descriptions[kind]+'</p>'+
     (kind==='deadline'?'<section class="hero"><h2>'+t('Próximos 7 días y vencidos')+'</h2>'+
       '<p>'+active('deadline').filter(item=>!item.done&&item.entry_date<=shiftDate(dateKey(),7)).length+'</p></section>':'')+
-    (kind==='event'?calendar()+'<section class="panel"><div class="filters"><label>'+t('Vista')+'<select id="agenda-mode">'+opts([['day',t('Día')],['week',t('Semana')]],agendaWeek?'week':'day')+'</select></label><label>'+t('Tipo')+'<select id="agenda-kind">'+opts([['all',t('Todos')],...agendaKinds.map(k=>[k,modules[k][0]])],agendaKind)+'</select></label><label>'+t('Responsable')+'<select id="agenda-person">'+opts([['all',t('Todos')],...members.map(m=>[m.user_id,m.name])],agendaPerson)+'</select></label></div><div class="actions"><button data-act="calendarImport">'+t('Importar ICS')+'</button><button data-act="calendarExport">'+t('Exportar ICS')+'</button><button data-act="scanEvent">'+t('Foto o PDF')+'</button></div></section>':kind==='budget'?budgetSummary():kind==='expense'?("<section class=\"hero\"><small>"+t("Gastos registrados en "))+dateLabel(dateKey(),{month:'long'})+'</small><h2>'+money(total)+'</h2></section>':'')+
+    (kind==='event'?calendar()+'<section class="panel"><div class="filters"><label>'+t('Vista')+'<select id="agenda-mode">'+opts([['day',t('Día')],['week',t('Semana')]],agendaWeek?'week':'day')+'</select></label><label>'+t('Tipo')+'<select id="agenda-kind">'+opts([['all',t('Todos')],...agendaKinds.map(k=>[k,modules[k][0]])],agendaKind)+'</select></label><label>'+t('Responsable')+'<select id="agenda-person">'+opts([['all',t('Todos')],...members.map(m=>[m.user_id,m.name])],agendaPerson)+'</select></label></div><div class="actions"><button data-act="calendarImport">'+t('Importar ICS')+'</button><button data-act="calendarExport">'+t('Exportar ICS')+'</button><button data-act="scanEvent">'+t('Foto o PDF')+'</button><button data-act="googleCalendar">Google Calendar</button></div></section>':kind==='budget'?budgetSummary():kind==='expense'?("<section class=\"hero\"><small>"+t("Gastos registrados en "))+dateLabel(dateKey(),{month:'long'})+'</small><h2>'+money(total)+'</h2></section>':'')+
     '<section class="panel"><div class="top"><h2>'+(kind==='event'?dateLabel(pickedDay,{weekday:'long',day:'numeric',month:'long'}):t('Registros'))+'</h2></div>'+
     ("<div class=\"filters\"><input id=\"search\" type=\"search\" aria-label=\""+t("Buscar")+"\" placeholder=\""+t("Buscar…")+"\" value=\"")+escape(filter)+'">'+
     (['task','shopping','pet','deadline'].includes(kind)?("<select id=\"status\" aria-label=\""+t("Estado")+"\">")+opts([['all',t('Todos')],['open',t('Pendientes')],['done',t('Completados')]],status)+'</select>':'')+
@@ -519,7 +521,7 @@ async function synchronize() {
 }
 function syncSoon() { void synchronize().catch(showError); }
 function draftScope(form) {
-  if (!household || !form || ['auth','house','join','scan-event'].includes(form.dataset.form)) return '';
+  if (!household || !form || ['auth','house','join','scan-event','google-calendar-import'].includes(form.dataset.form)) return '';
   return [household.id,form.dataset.form,form.dataset.type,form.dataset.kind,form.dataset.id,form.dataset.board].join(':')+(form.dataset.source?':'+form.dataset.source:'');
 }
 async function showEditor() {
@@ -616,6 +618,10 @@ async function submit(form) {
     openEditor('event',undefined,'scan');
     if(extracted.truncated) editor.querySelector('#form-error').textContent=t('Se leyeron las primeras tres páginas.');
     return;
+  }
+  if(type==='google-calendar-import') {
+    const chosen=new FormData(form).getAll('event').map(index=>googleEvents[Number(index)]).filter(Boolean);
+    await saveEntries(chosen); googleEvents=[]; editor.close();render();show(t('Guardado.'));return;
   }
   if (type==='calendar-import') {
     const file=values.calendar;
@@ -913,6 +919,34 @@ document.addEventListener('click',event=>{
   if(d.edit) {const entry=entries.find(i=>i.id===d.edit);if(entry) openEditor(entry.kind,entry);}
   if(d.day) {pickedDay=d.day; calendarMonth=fromKey(pickedDay);render();}
   if(d.month) {calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+Number(d.month),1,12);pickedDay=dateKey(calendarMonth);render();}
+  if(d.act==='googleCalendar') void run(button,async()=>{
+    const {data:{session:current}}=await db.auth.getSession();
+    const expected=sessionStorage.getItem('casa-calendar-user');
+    if (expected && expected!==session.user.id) {
+      sessionStorage.removeItem('casa-calendar-user');
+      show(t('Vuelve a entrar con la cuenta de tu hogar para importar eventos.'));
+      return;
+    }
+    if (!expected||!current?.provider_token) {
+      sessionStorage.setItem('casa-calendar-user',session.user.id);
+      await connectCalendar(db.auth,baseUrl());
+      return;
+    }
+    const result=await readGoogleEvents(current.provider_token);
+    const signature=item=>JSON.stringify([item.title,item.entry_date,item.entry_time?.slice(0,5)||'']);
+    const known=new Set(active('event').map(signature));
+    googleEvents=result.events.filter(item=>{
+      const key=signature(item);if(known.has(key))return false;known.add(key);return true;
+    });
+    editor.innerHTML='<h2>Google Calendar</h2><form data-form="google-calendar-import"><p>'+
+      t('Marca los eventos que quieres compartir con tu hogar.')+'</p>'+
+      (result.more?'<p>'+t('Se muestran hasta 250 eventos.')+'</p>':'')+
+      googleEvents.map((item,index)=>'<label class="recipe-check"><input type="checkbox" name="event" value="'+index+'">'+
+        escape(item.title)+' · '+dateLabel(item.entry_date)+' '+escape(item.entry_time)+'</label>').join('')+
+      (googleEvents.length?'<button class="primary">'+t('Importar eventos')+'</button>':'<p>'+t('Aún no hay registros.')+'</p>')+
+      '<button type="button" data-act="close">'+t('Cancelar')+'</button></form>';
+    editor.showModal();
+  });
   if(d.act==='scanEvent') void run(button,async()=>{
     const draft=await getDraft(session.user.id,household.id+':entry::event:::scan');
     editor.innerHTML='<h2>'+t('Foto o PDF')+'</h2><form data-form="scan-event"><p>'+t('El documento se procesa en este dispositivo. Se leen hasta tres páginas del PDF.')+'</p>'+
@@ -993,7 +1027,7 @@ document.addEventListener('click',event=>{
   });
   if(d.act==='enablePush') void run(button,async()=>{await enablePush(session.user.id,db,show);render();show(t('Dispositivo registrado para recibir avisos.'));});
   if(d.act==='disablePush') void run(button,async()=>{await disablePush(session.user.id,db);render();show(t('Avisos desactivados en este dispositivo.'));});
-  if(d.act==='logout') void run(button,async()=>{await disablePush(session.user.id,db);await result(db.auth.signOut());localStorage.removeItem(lastSessionKey);mode='login';notice='';await handleSession(null);});
+  if(d.act==='logout') void run(button,async()=>{await disablePush(session.user.id,db);await result(db.auth.signOut());localStorage.removeItem(lastSessionKey);sessionStorage.removeItem('casa-calendar-user');googleEvents=[];mode='login';notice='';await handleSession(null);});
   if(d.act==='invite') void run(button,async()=>{
     const code=await result(db.rpc('casa_create_invite',{h:household.id}));
     const link=new URL(baseUrl());link.searchParams.set('invitar',code);

@@ -1,4 +1,9 @@
 const portuguese = {
+  "Vuelve a entrar con la cuenta de tu hogar para importar eventos.":"Entre novamente com a conta da sua família para importar eventos.",
+  "No se pudo leer Google Calendar. Revisa el permiso y la API de Calendar.":"Não foi possível ler o Google Calendar. Confira a permissão e a API do Calendar.",
+  "Marca los eventos que quieres compartir con tu hogar.":"Selecione os eventos que deseja compartilhar com sua família.",
+  "Se muestran hasta 250 eventos.":"São exibidos até 250 eventos.",
+  "Importar eventos":"Importar eventos",
   "Foto o PDF":"Foto ou PDF",
   "Revisar borrador":"Revisar rascunho",
   "Revisa el título, la fecha y la hora antes de guardar.":"Confira o título, a data e o horário antes de salvar.",
