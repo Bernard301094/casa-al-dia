@@ -400,8 +400,7 @@ document.addEventListener('click',event=>{
     await refresh();render();
   });
   if(d.act==='removeLocation') void run(button,async()=>{
-    await result(db.from('casa_entries').update({archived:true})
-      .eq('household_id',household.id).eq('author',session.user.id).eq('kind','location').eq('archived',false));
+    await result(db.rpc('casa_withdraw_location',{h:household.id}));
     await refresh();render();
   });
   if(d.act==='logout') void run(button,async()=>{await result(db.auth.signOut());mode='login';notice='';await handleSession(null);});
