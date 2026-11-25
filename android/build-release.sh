@@ -14,9 +14,14 @@ output=$5
 project=$(cd -- "$(dirname -- "$0")" && pwd)
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
-mkdir -p "$stage/classes" "$stage/dex"
+mkdir -p "$stage/classes" "$stage/dex" "$stage/assets/casa"
+(
+  cd "$project/.."
+  npm run build
+  cp -R dist/. "$stage/assets/casa/"
+)
 "$build_tools/aapt2" compile --dir "$project/res" -o "$stage/resources.zip"
-"$build_tools/aapt2" link -I "$android_jar" --manifest "$project/AndroidManifest.xml" \
+"$build_tools/aapt2" link -I "$android_jar" --manifest "$project/AndroidManifest.xml" -A "$stage/assets" \
   -o "$stage/unsigned.apk" "$stage/resources.zip"
 source_file="$project/src/com/casaaldia/app/MainActivity.java"
 if [[ -n ${CASA_ECJ_JAR:-} ]]; then

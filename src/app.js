@@ -15,10 +15,11 @@ import { createClient } from '@supabase/supabase-js';
 import { url, key } from './config.js';
 import { moduleDetails, fileKinds, nextBirthday, daysUntil, monthKey, memberLocation } from './family.js';
 
+const android = globalThis.CasaAndroid;
 const returnUrl = new URL(location.href);
 const fragment = new URLSearchParams(returnUrl.hash.slice(1));
 const oauthError = returnUrl.searchParams.get('error') ?? fragment.get('error');
-const db = createClient(url, key, {global:{fetch:(input,init={})=>{
+const db = createClient(url, key, {auth:{flowType:android?'pkce':'implicit'},global:{fetch:(input,init={})=>{
   const path=typeof input==='string'?input:input.url;
   const timeout=AbortSignal.timeout(path?.includes('/storage/v1/object/')?120000:12000);
   return fetch(input,{...init,signal:init.signal?AbortSignal.any([init.signal,timeout]):timeout});
@@ -91,6 +92,26 @@ function themeControl() {
   return '<button type="button" class="icon-button" data-act="theme" aria-label="'+(dark?t('Usar tema claro'):t('Usar tema oscuro'))+'">'+icon(dark?'sun':'moon')+'</button>';
 }
 const baseUrl = () => new URL(location.pathname,location.origin).href;
+const authReturnUrl = () => android ? 'com.casaaldia.app://auth' : baseUrl();
+
+async function saveDownload(blob, filename) {
+  if (android) {
+    const encoded = await new Promise((resolve,reject)=>{
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+    android.save(filename, blob.type.split(';')[0] || 'application/octet-stream', encoded);
+    return;
+  }
+  const link=document.createElement('a');
+  const objectUrl=URL.createObjectURL(blob);
+  link.href=objectUrl;
+  link.download=filename;
+  link.click();
+  setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);
+}
 const opts = (list, selected) => list.map(([value,label]) => '<option value="'+escape(value)+'" '+(value===selected?'selected':'')+'>'+escape(label)+'</option>').join('');
 const active = kind => entries.filter(item => item.kind === kind && !item.archived);
 function show(text) {
@@ -136,7 +157,7 @@ async function startGoogle() {
   }
   const data=await result(db.auth.signInWithOAuth({
     provider:'google',
-    options:{redirectTo:baseUrl(),skipBrowserRedirect:true,queryParams:{prompt:'select_account'}},
+    options:{redirectTo:authReturnUrl(),skipBrowserRedirect:true,queryParams:{prompt:'select_account'}},
   }));
   if (!data.url) throw new Error('No se pudo verificar el acceso con Google.');
   location.assign(data.url);
@@ -302,7 +323,7 @@ function locations() {
     [...latest.values()].filter(i=>Date.now()-Date.parse(i.created_at)<86400000).map(i=>{
       const name=members.find(m=>m.user_id===i.author)?.name||t('Miembro');
       const url='https://www.openstreetmap.org/?mlat='+i.latitude+'&mlon='+i.longitude+'#map=16/'+i.latitude+'/'+i.longitude;
-      return '<div class="row"><div class="grow"><strong>'+escape(name)+'</strong><p class="muted">'+escape(new Date(i.created_at).toLocaleString(locale()))+'</p><a href="'+escape(url)+'" target="_blank" rel="noopener noreferrer">'+t('Abrir en OpenStreetMap')+'</a></div>'+
+      return '<div class="row"><div class="grow"><strong>'+escape(name)+'</strong><p class="muted">'+escape(new Date(i.created_at).toLocaleString(locale()))+'</p><a href="'+escape(url)+'" '+(android?'':'target="_blank" rel="noopener noreferrer"')+'>'+t('Abrir en OpenStreetMap')+'</a></div>'+
         (i.author===session.user.id?("<button class=\"danger\" data-act=\"removeLocation\">"+t("Quitar")+"</button>"):'')+'</div>';
     }).join('')+'</div></section>';
 }
@@ -730,10 +751,10 @@ async function submit(form) {
     if (mode==='login') {
       const data=await result(db.auth.signInWithPassword({email,password})); notice=''; await handleSession(data.session);
     } else if (mode==='signup') {
-      const data=await result(db.auth.signUp({email,password,options:{emailRedirectTo:baseUrl()}}));
+      const data=await result(db.auth.signUp({email,password,options:{emailRedirectTo:authReturnUrl()}}));
       mode='login'; notice=data.session?'':t('Revisa tu correo para confirmar la cuenta.'); await handleSession(data.session);
     } else if (mode==='forgot') {
-      await result(db.auth.resetPasswordForEmail(email,{redirectTo:baseUrl()}));
+      await result(db.auth.resetPasswordForEmail(email,{redirectTo:authReturnUrl()}));
       mode='login'; notice=t('Si el correo está registrado, recibirás un enlace de recuperación.'); render();
     } else {
       await result(db.auth.updateUser({password})); mode='login'; notice=t('Contraseña actualizada.'); await loadHomes(); render();
@@ -995,7 +1016,7 @@ document.addEventListener('click',event=>{
     }
     if (!expected||!current?.provider_token) {
       sessionStorage.setItem('casa-calendar-user',session.user.id);
-      await connectCalendar(db.auth,baseUrl());
+      await connectCalendar(db.auth,authReturnUrl());
       return;
     }
     const result=await readGoogleEvents(current.provider_token);
@@ -1029,11 +1050,8 @@ document.addEventListener('click',event=>{
       '<div class="actions"><button class="primary">'+t('Importar ICS')+'</button><button type="button" data-act="close">'+t('Cancelar')+'</button></div></form>';
     void showEditor();
   }
-  if(d.act==='calendarExport') {
-    const link=document.createElement('a');
-    const url=URL.createObjectURL(new Blob([writeCalendar(active('event'))],{type:'text/calendar;charset=utf-8'}));
-    link.href=url;link.download='casa-al-dia.ics';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-  }
+  if(d.act==='calendarExport') void run(button,()=>saveDownload(
+    new Blob([writeCalendar(active('event'))],{type:'text/calendar;charset=utf-8'}),'casa-al-dia.ics'));
   if(d.act==='calendarToday') {pickedDay=dateKey();calendarMonth=fromKey(pickedDay);render();}
   if(d.act==='theme') {toggleTheme(); const control=button.querySelector('svg'); if(control) control.outerHTML=icon(currentTheme()==='dark'?'sun':'moon'); button.setAttribute('aria-label',currentTheme()==='dark'?t('Usar tema claro'):t('Usar tema oscuro'));}
   if(d.org) {
@@ -1069,14 +1087,11 @@ document.addEventListener('click',event=>{
     const path=item.attachment_path;
     const owner=session.user.id,home=household.id;
     const local=await localFile(owner,home,path);
-    if (local||isPacked(path)) {
+    if (android||local||isPacked(path)) {
       const stored=local??await result(db.storage.from(fileKinds[item.kind].bucket).download(path));
       const blob=await unpackAttachment(stored,path);
       if(!local) await putFile(owner,home,path,stored).catch(()=>{});
-      const link=document.createElement('a');
-      const objectUrl=URL.createObjectURL(blob);
-      link.href=objectUrl;link.download=item.attachment_name;link.click();
-      setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);
+      await saveDownload(blob,item.attachment_name);
       return;
     }
     const params=item.kind!=='photo'?{download:item.attachment_name}:{};
@@ -1100,7 +1115,7 @@ document.addEventListener('click',event=>{
   if(d.act==='logout') void run(button,async()=>{await disablePush(session.user.id,db);await result(db.auth.signOut());localStorage.removeItem(lastSessionKey);sessionStorage.removeItem('casa-calendar-user');googleEvents=[];mode='login';notice='';await handleSession(null);});
   if(d.act==='invite') void run(button,async()=>{
     const code=await result(db.rpc('casa_create_invite',{h:household.id}));
-    const link=new URL(baseUrl());link.searchParams.set('invitar',code);
+    const link=new URL(android ? '/' : baseUrl(),location.origin);link.searchParams.set('invitar',code);
     currentInviteLink=link.href; document.querySelector('#invite-link').innerHTML=inviteMarkup();
   });
   if(d.act==='copy') void run(button,async()=>{await navigator.clipboard.writeText(document.querySelector('#invite-link input').value);show(t('Enlace copiado.'));});
@@ -1132,4 +1147,4 @@ db.auth.onAuthStateChange((event,current)=>{
   }
 });
 
-if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).catch(console.error);
+if (!android && 'serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).catch(console.error);

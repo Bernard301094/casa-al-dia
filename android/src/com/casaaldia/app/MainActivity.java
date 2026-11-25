@@ -8,7 +8,14 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.GeolocationPermissions;
-import android.webkit.DownloadListener;
+import android.webkit.JavascriptInterface;
+import android.webkit.MimeTypeMap;
+import android.webkit.WebResourceResponse;
+import android.util.Base64;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.util.Collections;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -18,7 +25,12 @@ import android.widget.Toast;
 
 public final class MainActivity extends Activity {
     private static final String APP_HOST = "casa-al-dia-familiar.bernard30101994.chatgpt.site";
-    private static final String APP_URL = "https://" + APP_HOST + "/";
+    private static final String APP_PATH = "/__android__/";
+    private static final String APP_URL = "https://" + APP_HOST + APP_PATH;
+    private static final String AUTH_HOST = "cuocktwxrkewwcmkrlbw.supabase.co";
+    private static final String AUTH_CALLBACK = "com.casaaldia.app://auth";
+    private static final int SAVE_FILE = 3;
+    private byte[] pendingDownload;
     private static final int CHOOSE_FILE = 1;
     private static final int LOCATION = 2;
     private WebView web;
@@ -34,17 +46,38 @@ public final class MainActivity extends Activity {
         web.getSettings().setDomStorageEnabled(true);
         web.getSettings().setAllowFileAccess(false);
         web.getSettings().setAllowContentAccess(false);
+        web.addJavascriptInterface(new LocalFiles(), "CasaAndroid");
         web.setWebViewClient(new WebViewClient() {
+            @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                Uri url = request.getUrl();
+                if (!isApp(url)) return null;
+                String path = url.getPath();
+                if (path != null && path.startsWith(APP_PATH)) {
+                    return bundledAsset(path.substring(APP_PATH.length()));
+                }
+                return missingAsset();
+            }
+
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri url = request.getUrl();
-                if (isApp(url)) return false;
-                if (request.isForMainFrame() && "https".equals(url.getScheme())) {
-                    boolean oauth = "accounts.google.com".equals(url.getHost())
-                        || ("cuocktwxrkewwcmkrlbw.supabase.co".equals(url.getHost())
-                            && "/auth/v1/authorize".equals(url.getPath()));
-                    openBrowser(oauth ? Uri.parse(APP_URL) : url);
-                    if (oauth) Toast.makeText(MainActivity.this,
-                        "Continúa con Google en el navegador", Toast.LENGTH_LONG).show();
+                if (!request.isForMainFrame()) return true;
+                if (isApp(url)) {
+                    String path = url.getPath();
+                    if (path != null && path.startsWith(APP_PATH)) return false;
+                    if ("/".equals(path) || "/index.html".equals(path)) {
+                        Uri.Builder local = Uri.parse(APP_URL).buildUpon();
+                        local.encodedQuery(url.getEncodedQuery()).encodedFragment(url.getEncodedFragment());
+                        view.loadUrl(local.toString());
+                    }
+                    return true;
+                }
+                if (isHttpsHost(url, AUTH_HOST) && "/auth/v1/authorize".equals(url.getPath())
+                        && "google".equals(url.getQueryParameter("provider"))
+                        && AUTH_CALLBACK.equals(url.getQueryParameter("redirect_to"))
+                        && "s256".equalsIgnoreCase(url.getQueryParameter("code_challenge_method"))) {
+                    openBrowser(url);
+                } else if (request.hasGesture() && isHttpsHost(url, "www.openstreetmap.org")) {
+                    openBrowser(url);
                 }
                 return true;
             }
@@ -71,18 +104,92 @@ public final class MainActivity extends Activity {
                 requestPermissions(new String[]{Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION}, LOCATION);
             }
         });
-        web.setDownloadListener(new DownloadListener() {
-            @Override public void onDownloadStart(String address, String agent, String disposition, String mime, long size) {
-                Uri uri = Uri.parse(address);
-                if ("https".equals(uri.getScheme())) openBrowser(uri);
-            }
-        });
-        if (state == null || web.restoreState(state) == null) web.loadUrl(APP_URL);
+        if (!openAuthCallback(getIntent())) {
+            web.loadUrl(APP_URL);
+        }
+    }
+
+    private WebResourceResponse bundledAsset(String path) {
+        if (path.isEmpty()) path = "index.html";
+        if (!path.matches("[A-Za-z0-9_./-]+") || path.contains("..") || path.startsWith("/")) {
+            return missingAsset();
+        }
+        String extension = MimeTypeMap.getFileExtensionFromUrl(path);
+        String mime;
+        switch (extension) {
+            case "js": case "mjs": mime = "text/javascript"; break;
+            case "wasm": mime = "application/wasm"; break;
+            case "woff2": mime = "font/woff2"; break;
+            case "webmanifest": mime = "application/manifest+json"; break;
+            default: mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
+        }
+        try {
+            return new WebResourceResponse(mime == null ? "application/octet-stream" : mime,
+                "UTF-8", 200, "OK", Collections.singletonMap("Content-Security-Policy", "frame-src 'none'; object-src 'none'"),
+                getAssets().open("casa/" + path));
+        } catch (IOException error) {
+            return missingAsset();
+        }
+    }
+
+    private static WebResourceResponse missingAsset() {
+        return new WebResourceResponse("text/plain", "UTF-8", 404, "Not Found",
+            Collections.emptyMap(), new ByteArrayInputStream(new byte[0]));
     }
 
     private static boolean isApp(Uri uri) {
-        return "https".equals(uri.getScheme()) && APP_HOST.equals(uri.getHost())
-            && (uri.getPort() == -1 || uri.getPort() == 443);
+        return isHttpsHost(uri, APP_HOST);
+    }
+
+    private static boolean isHttpsHost(Uri uri, String host) {
+        return "https".equals(uri.getScheme()) && host.equals(uri.getHost())
+            && uri.getUserInfo() == null && (uri.getPort() == -1 || uri.getPort() == 443);
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        openAuthCallback(intent);
+    }
+
+    private boolean openAuthCallback(Intent intent) {
+        Uri callback = intent.getData();
+        if (!Intent.ACTION_VIEW.equals(intent.getAction()) || callback == null || !callback.isHierarchical()
+                || !"com.casaaldia.app".equals(callback.getScheme()) || !"auth".equals(callback.getEncodedAuthority())
+                || (callback.getPath() != null && !callback.getPath().isEmpty())) return false;
+        String code = callback.getQueryParameter("code");
+        String error = callback.getQueryParameter("error");
+        if (code == null && error == null) return false;
+        Uri.Builder local = Uri.parse(APP_URL).buildUpon();
+        if (code != null) local.appendQueryParameter("code", code);
+        else local.appendQueryParameter("error", error);
+        setIntent(new Intent(this, MainActivity.class));
+        web.loadUrl(local.toString());
+        return true;
+    }
+
+    private final class LocalFiles {
+        @JavascriptInterface public void save(String filename, String mime, String base64) {
+            if (base64.length() > 30 * 1024 * 1024) return;
+            byte[] bytes;
+            try { bytes = Base64.decode(base64, Base64.DEFAULT); }
+            catch (IllegalArgumentException error) { return; }
+            runOnUiThread(new Runnable() {
+                @Override public void run() { chooseDownload(filename, mime, bytes); }
+            });
+        }
+    }
+
+    private void chooseDownload(String filename, String mime, byte[] bytes) {
+        if (pendingDownload != null) return;
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE).setType(mime)
+            .putExtra(Intent.EXTRA_TITLE, filename);
+        pendingDownload = bytes;
+        try { startActivityForResult(intent, SAVE_FILE); }
+        catch (ActivityNotFoundException error) {
+            pendingDownload = null;
+            Toast.makeText(this, "No se pudo abrir el selector de archivos", Toast.LENGTH_LONG).show();
+        }
     }
 
     private boolean hasLocation() {
@@ -93,12 +200,24 @@ public final class MainActivity extends Activity {
     private void openBrowser(Uri url) {
         try { startActivity(new Intent(Intent.ACTION_VIEW, url)); }
         catch (ActivityNotFoundException error) {
-            Toast.makeText(this, "Abre Casa al Día en un navegador", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "No se encontró un navegador para abrir este enlace", Toast.LENGTH_LONG).show();
         }
     }
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == SAVE_FILE) {
+            byte[] bytes = pendingDownload;
+            pendingDownload = null;
+            if (bytes != null && result == RESULT_OK && data != null && data.getData() != null) {
+                try (OutputStream output = getContentResolver().openOutputStream(data.getData())) {
+                    if (output == null) throw new IOException("Output unavailable");
+                    output.write(bytes);
+                } catch (IOException | SecurityException error) {
+                    Toast.makeText(this, "No se pudo guardar el archivo", Toast.LENGTH_LONG).show();
+                }
+            }
+        }
         if (request == CHOOSE_FILE && files != null) {
             files.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result, data));
             files = null;
@@ -111,11 +230,6 @@ public final class MainActivity extends Activity {
             location.invoke(locationOrigin, hasLocation(), false);
             location = null;
         }
-    }
-
-    @Override protected void onSaveInstanceState(Bundle state) {
-        web.saveState(state);
-        super.onSaveInstanceState(state);
     }
 
     @Override public void onBackPressed() {
