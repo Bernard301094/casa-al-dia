@@ -151,7 +151,7 @@ form { display:grid;gap:1rem }
 .calendar small { display:block;font-size:.75rem }
 .calendar .day-label { text-align:center;color:var(--muted);font-size:.83rem;font-weight:700 }
 .calendar .outside { opacity:.55 }
-.split { display:grid;grid-template-columns:1fr 1fr;gap:.65rem }
+.split { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem }
 .bottom,.mobile-homes { display:none }
 dialog { width:min(calc(100vw - 24px),520px);max-height:92svh;overflow:auto;border:1px solid var(--line);border-radius:23px;color:var(--text);padding:1.22rem;background:var(--surface);box-shadow:0 24px 80px #17102650 }
 dialog::backdrop { background:#1711268f;backdrop-filter:blur(3px) }
@@ -165,7 +165,7 @@ dialog .actions { flex-wrap:wrap }
   .hero-deco { width:59px }
   .hero-deco .ui-icon { width:30px;height:30px }
 }
-@media(max-width:700px) {
+@media (max-width:700px), (max-width:1000px) and (orientation:landscape) and (max-height:550px) {
   .shell,.auth { display:block }
   .auth-art { padding:1.65rem 1.2rem 1.85rem }
   .auth-art h1 { max-width:16ch;font-size:2.65rem }
@@ -213,7 +213,7 @@ dialog .actions { flex-wrap:wrap }
 .language-control select { width:auto; max-width:100%; font-size:.88rem; font-weight:640; }
 .page-head .language-control { margin-inline-start:auto; }
 .auth-form .language-control { justify-content:space-between; }
-@media(max-width:700px) {
+@media (max-width:700px), (max-width:1000px) and (orientation:landscape) and (max-height:550px) {
   .page-head { flex-wrap:wrap; }
   .page-head .language-control { flex-basis:100%; margin-inline-start:0; }
 }
@@ -316,3 +316,39 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance:none; margi
 .agenda-day { display:grid; gap:.45rem; margin-block:.85rem; }
 .recipe-check { display:flex; align-items:center; gap:.55rem; }
 fieldset { min-width:0; display:grid; gap:.55rem; border:1px solid var(--line); border-radius:12px; }
+
+/* Keep intrinsic widths of form fields and long entries inside their layout track. */
+.actions { flex-wrap:wrap; }
+form, fieldset, label, .filters > *, .split > * { min-inline-size:0; }
+input, select, textarea, button { max-inline-size:100%; }
+button, .workspace-label, .row p, .panel h2, .panel h3 { overflow-wrap:anywhere; }
+input[type="file"] { text-overflow:ellipsis; overflow:hidden; }
+.date-trigger > span { min-inline-size:0; overflow-wrap:anywhere; }
+.date-picker-grid button { min-inline-size:0; min-block-size:44px; }
+
+@media (max-width:700px), (max-width:1000px) and (orientation:landscape) and (max-height:550px) {
+  .content {
+    padding-inline:max(.9rem,env(safe-area-inset-left)) max(.9rem,env(safe-area-inset-right));
+    padding-block-start:max(.95rem,env(safe-area-inset-top));
+  }
+  .bottom {
+    padding-inline:max(.3rem,env(safe-area-inset-left)) max(.3rem,env(safe-area-inset-right));
+  }
+  .bottom button { min-block-size:48px; }
+  .panel .row { flex-wrap:wrap; }
+  .panel .row > .grow { flex-basis:min(100%,12rem); }
+  .panel .row > .actions { max-inline-size:100%; }
+  .language-control select { min-inline-size:0; }
+  dialog {
+    max-block-size:calc(100dvh - max(1rem,env(safe-area-inset-top)) - max(1rem,env(safe-area-inset-bottom)));
+    overflow-y:auto;
+    overscroll-behavior:contain;
+  }
+}
+@media (max-width:440px) {
+  .split, .content > .grid { grid-template-columns:minmax(0,1fr); }
+  .filters > * { flex-basis:100%; }
+  .calendar { gap:.2rem; }
+  .page-head .actions { flex:0 1 auto; }
+  .auth-art h1 { font-size:clamp(1.9rem,9vw,2.65rem); }
+}
