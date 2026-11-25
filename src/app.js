@@ -126,6 +126,14 @@ async function startGoogle() {
   if (!data.url) throw new Error('No se pudo verificar el acceso con Google.');
   location.assign(data.url);
 }
+function googleControl() {
+  if (window.self !== window.top) {
+    return '<a class="google-button external-login" target="_blank" rel="noopener noreferrer" href="'+
+      escape(baseUrl())+'">'+t('Abrir Casa al Día en el navegador')+'</a><small>'+
+      t('Para entrar con Google, abre la app en una pestaña del navegador.')+'</small>';
+  }
+  return '<button type="button" class="google-button" data-act="google">'+t('Continuar con Google')+'</button>';
+}
 function authScreen() {
   const login = mode === 'login', forgot = mode === 'forgot', reset = mode === 'reset';
   const title = reset ? t('Nueva contraseña') : forgot ? t('Recupera tu cuenta') : login ? t('Entra a tu hogar') : t('Crea tu cuenta');
@@ -133,7 +141,7 @@ function authScreen() {
     (reset?'':("<label>"+t("Correo electrónico")+"<input name=\"email\" type=\"email\" autocomplete=\"email\" required></label>"))+
     (forgot?'':'<label>'+t('Contraseña')+'<input name="password" type="password" minlength="8" autocomplete="'+(login?'current-password':'new-password')+'" required></label>')+
     '<button class="primary">'+(reset?t('Guardar contraseña'):forgot?t('Enviar enlace'):login?t('Entrar'):t('Registrarme'))+'</button></form>'+
-    (login||mode==='signup'?('<button type="button" class="google-button" data-act="google">'+t('Continuar con Google')+'</button>'):'')+
+    (login||mode==='signup'?googleControl():'')+
     (reset?'':login?("<button data-mode=\"signup\">"+t("Crear cuenta")+"</button><button data-mode=\"forgot\">"+t("Olvidé mi contraseña")+"</button>"):("<button data-mode=\"login\">"+t("Volver a iniciar sesión")+"</button>"))+
     '</section></div></div>';
 }

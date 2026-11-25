@@ -292,3 +292,5 @@ select option { background:var(--surface); color:var(--text); }
 
 .sync-status { display:flex; align-items:center; justify-content:space-between; gap:.7rem; flex-wrap:wrap; color:var(--accent-text); background:var(--accent-soft); border-radius:12px; padding:.55rem .8rem; font-size:.9rem; }
 .sync-status:empty { display:none; }
+
+.external-login { display:grid; place-items:center; border:1px solid var(--line); border-radius:12px; padding:.65rem; font-weight:700; text-align:center; }
