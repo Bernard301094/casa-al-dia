@@ -19,3 +19,7 @@ En Google Cloud, registra un cliente OAuth de tipo aplicación web. Configura el
 ## Módulos familiares
 
 Explorar reúne listas, calendario, recetas, mensajes, galería, contactos, actividad, cumpleaños, documentos, presupuesto, comidas, horario y mapa. Las listas se agrupan por nombre. Los presupuestos se suman por mes y comparan con los gastos registrados en ese mes. Los archivos de hasta 20 MB se guardan en buckets privados y se abren por enlaces de corta duración. El mapa muestra ubicaciones compartidas manualmente durante 24 horas. Los miembros pueden retirar su ubicación antes de ese plazo.
+
+## Rutinas y recordatorios
+
+En **Explorar → Rutinas**, crea una repetición diaria o semanal. Puedes escoger un responsable principal y otro alterno. Desde el selector de fecha puedes completar, omitir o reasignar esa fecha. Hoy muestra las rutinas pendientes de la fecha local del dispositivo. Si programas un aviso, se muestra dentro de la app mientras está abierta. Los avisos push con la app cerrada requieren la integración de Firebase Cloud Messaging.

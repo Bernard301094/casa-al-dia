@@ -1,3 +1,4 @@
+import { occurrence, routinePanel, routineEditor } from './routines.js';
 import { t, locale, setLocale, languageControl, plural } from './i18n.js';
 import '@fontsource-variable/dm-sans/wght.css';
 import '@fontsource-variable/outfit/wght.css';
@@ -17,7 +18,7 @@ function localizeModules() {
     shopping: [t('Compras'),'◫',t('producto')], meal: [t('Comidas'),'♨',t('comida')], expense: [t('Gastos'),'＄',t('gasto')],
     note: [t('Notas'),'▤',t('nota')], message: [t('Chat'),'◌',t('mensaje')], pet: [t('Mascotas'),'♡',t('cuidado')],
     family: [t('Mi familia'),'♧'], more: [t('Explorar'),'⋯'],
-    lists: [t('Listas'),'☷'], activity: [t('Actividad'),'◉'], location: [t('Mapa'),'⌖'],
+    routine: [t('Rutinas'),'↻'], lists: [t('Listas'),'☷'], activity: [t('Actividad'),'◉'], location: [t('Mapa'),'⌖'],
     ...extras,
   };
   descriptions = {
@@ -41,11 +42,18 @@ let session, household, subscription;
 let homes = [], members = [], entries = [];
 let currentInviteLink = '';
 let activity = [];
+let routines = [], routineDays = [];
 let view = 'today', filter = '', status = 'all', mode = 'login', notice = '';
 let busy = false, generation = 0, refreshVersion = 0;
 const dateKey = (d = new Date()) => [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
 const fromKey = key => new Date(key + 'T12:00:00');
 const dateLabel = (key, options = {day:'numeric', month:'long'}) => new Intl.DateTimeFormat(locale(),options).format(fromKey(key));
+const tomorrowKey = (now = new Date()) => {
+  const tomorrow=new Date(now);
+  tomorrow.setDate(tomorrow.getDate()+1);
+  return dateKey(tomorrow);
+};
+let routineDate = dateKey();
 let pickedDay = dateKey(), calendarMonth = fromKey(pickedDay);
 const money = value => new Intl.NumberFormat(locale(),{style:'currency',currency:'BRL'}).format(value);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -76,7 +84,8 @@ function errorText(error) {
   if (/password/i.test(msg) && /characters|weak/i.test(msg)) return t('Usa una contraseña de al menos 8 caracteres.');
   if (['Este navegador no admite ubicación.',
     'No pudimos obtener tu ubicación. Revisa el permiso del navegador.',
-    'El archivo supera el límite de 20 MB.'].includes(msg)) return t(msg);
+    'El archivo supera el límite de 20 MB.', 'Selecciona dos responsables distintos para alternar.',
+    'Indica una hora para el recordatorio.'].includes(msg)) return t(msg);
   return t('No se pudo completar la operación.') + (locale()==='es-419' && msg ? ' '+msg : '');
 }
 function authScreen() {
@@ -103,11 +112,12 @@ function render() {
   const invite = sessionStorage.getItem(inviteStorage);
   const top = household ? modules[view][0] : t('Tu hogar');
   app.innerHTML = '<div class="shell"><aside class="side">'+brand+homeBar+
-    (household?navigation(['today','event','lists','shopping','meal','message','more','family'],'nav'):'')+
+    (household?navigation(['today','event','lists','routine','shopping','meal','message','more','family'],'nav'):'')+
     '<button class="side-footer" data-act="logout">'+icon('signout')+(t("Cerrar sesión")+"</button></aside><main class=\"content\"><header class=\"page-head\"><div><div class=\"workspace-label\">")+escape(household?.name ?? 'Casa al Día')+'</div><h1>'+top+'</h1></div><div class="actions">'+add+themeControl()+'</div>'+languageControl()+'</header>'+
     '<p id="notice" class="notice" role="status">'+escape(notice)+'</p>'+
     (invite && view!== 'family' && household?("<button data-view=\"family\">"+t("Tienes una invitación pendiente")+"</button>"):'')+
-    (!household || view==='family'?family():view==='today'?dashboard():view==='more'?more():view==='lists'?listHub():view==='activity'?activityPanel():view==='location'?locations():listing(view))+
+    '<div id="routine-notice" class="notice" role="status">'+reminderText()+'</div>'+
+    (!household || view==='family'?family():view==='today'?dashboard():view==='more'?more():view==='lists'?listHub():view==='activity'?activityPanel():view==='routine'?routinePanel({date:routineDate,routines,occurrences:routinesOn(routineDate),members,escape,options:opts}):view==='location'?locations():listing(view))+
     '</main>'+(household?navigation(['today','event','lists','message','more'],'bottom'):'')+'</div>';
 }
 function family() {
@@ -123,6 +133,29 @@ function inviteMarkup() {
   if (!currentInviteLink) return '';
   return '<label>'+t('Enlace de un solo uso, válido por 7 días')+'<input readonly value="'+escape(currentInviteLink)+("\"></label><button type=\"button\" data-act=\"copy\">"+t("Copiar invitación")+"</button>");
 }
+function routinesOn(date) {
+  const exceptions=new Map(routineDays.filter(row=>row.day===date).map(row=>[row.routine_id,row]));
+  return routines.map(item=>occurrence(item,date,exceptions.get(item.id))).filter(Boolean);
+}
+function reminderText() {
+  if (!household || !session) return '';
+  const now=new Date();
+  const today=dateKey(now);
+  const due=[...routinesOn(today),...routinesOn(tomorrowKey(now))].filter(item=>{
+    if (item.status!=='pending' || item.reminder_minutes===null || !item.due_time) return false;
+    const assigned=members.some(member=>member.user_id===item.assignee) && item.assignee;
+    if (assigned && assigned!==session.user.id) return false;
+    const scheduled=new Date(item.day+'T'+item.due_time.slice(0,5));
+    return now.getTime()>=scheduled.getTime()-item.reminder_minutes*60000;
+  });
+  return due.length ? escape(t('Recordatorio de rutinas'))+': '+due.map(item=>escape(item.title)).join(' · ') : '';
+}
+function updateRoutineNotice() {
+  const target=document.querySelector('#routine-notice');
+  if (!target || document.visibilityState!=='visible') return;
+  const message=reminderText();
+  if (target.innerHTML!==message) target.innerHTML=message;
+}
 function dashboard() {
   const today = dateKey();
   const events = active('event').filter(i=>i.entry_date===today).sort(byDate);
@@ -133,15 +166,24 @@ function dashboard() {
   const card = (kind,title,count,items) => '<button class="summary-card tone-'+kind+'" data-view="'+kind+'"><span class="summary-top"><span class="module-icon">'+icon(kind)+'</span>'+icon('chevron','summary-chevron')+'</span><span class="summary-number">'+count+'</span><strong>'+title+'</strong>'+ (items.length ? '<small>'+escape(items[0].title)+'</small>' : '')+'</button>';
   return '<section class="hero dashboard-hero"><div class="hero-copy"><span class="hero-date">'+icon('calendar')+dateLabel(today,{weekday:'long',day:'numeric',month:'long'})+'</span><h2>'+t('Así va el día')+'<br>'+escape(t('en {home}',{home:household.name}))+'</h2><p>'+(events.length?plural(events.length,'Tienes {count} compromiso hoy.','Tienes {count} compromisos hoy.'):t('La agenda de hoy está libre.'))+'</p><button data-new="event" class="hero-button">'+icon('plus')+(t("Nuevo evento")+"</button></div><div class=\"hero-art\" aria-hidden=\"true\"><div class=\"hero-orb\"></div><div class=\"hero-deco hero-deco-calendar\">")+icon('event')+'</div><div class="hero-deco hero-deco-tasks">'+icon('task')+'</div><div class="hero-deco hero-deco-heart">'+icon('family')+'</div></div></section>'+
     '<div class="dashboard-stats">'+card('event',t('Compromisos hoy'),events.length,events)+card('task',t('Tareas pendientes'),tasks.length,tasks)+card('shopping',t('Compras pendientes'),shop.length,shop)+'</div>'+
+    '<section class="panel"><div class="section-heading"><h2>'+t('Rutinas de hoy')+'</h2><button data-view="routine" class="text-button">'+t('Ver rutinas')+'</button></div>'+routineOverview(today)+'</section>'+
     ("<div class=\"dashboard-columns\"><section class=\"panel\"><div class=\"section-heading\"><h2>"+t("Próximos compromisos")+"</h2><button class=\"text-button\" data-view=\"event\">"+t("Calendario")+" ")+icon('chevron')+'</button></div>'+(upcoming.length?upcoming.map(row).join(''):emptyState('event',t('No hay compromisos próximos.'),t('Agregar evento')))+'</section>'+
     ("<section class=\"panel\"><div class=\"section-heading\"><h2>"+t("Menú de hoy")+"</h2><button class=\"text-button\" data-view=\"meal\">"+t("Comidas")+" ")+icon('chevron')+'</button></div>'+(meals.length?meals.map(row).join(''):emptyState('meal',t('No hay comidas planificadas.'),t('Planificar comida')))+'</section></div>';
+}
+function routineOverview(today) {
+  const pending=routinesOn(today).filter(item=>item.status==='pending');
+  return pending.length ? pending.map(item=>{
+    const assignee=members.find(member=>member.user_id===item.assignee)?.name;
+    return '<div class="row"><strong class="grow">'+escape(item.title)+'</strong><small>'+
+      escape([item.due_time?.slice(0,5),assignee].filter(Boolean).join(' · '))+'</small></div>';
+  }).join('') : '<p class="muted">'+t('No hay rutinas pendientes para hoy.')+'</p>';
 }
 function emptyState(kind,text,action) {
   return '<div class="empty-state"><span class="module-icon">'+icon(kind)+'</span><p>'+text+'</p>'+(action?'<button class="text-button" data-new="'+kind+'">'+icon('plus')+action+'</button>':'')+'</div>';
 }
 
 const exploreGroups = [
-  ['Organización',['lists','event','schedule','birthday','contact','family']],
+  ['Organización',['lists','event','routine','schedule','birthday','contact','family']],
   ['En familia',['recipe','meal','message','photo','document','activity','location']],
   ['Hogar',['budget','expense','note','pet']],
 ];
@@ -262,13 +304,15 @@ async function refresh() {
       if (batch.length<500) return all;
     }
   };
-  const [items, people, changes] = await Promise.all([
+  const [items, people, templates, exceptions, changes] = await Promise.all([
     entryRequest(),result(db.from('casa_members').select('*').eq('household_id',id).order('name')),
+    result(db.from('casa_routines').select('*').eq('household_id',id).eq('archived',false).order('starts_on').order('id')),
+    result(db.from('casa_routine_days').select('*').eq('household_id',id).in('day',[...new Set([routineDate,dateKey(),tomorrowKey()])])),
     result(db.from('casa_activity').select('*').eq('household_id',id).order('created_at',{ascending:false}).limit(75)),
   ]);
   if (household?.id!==id||version!==refreshVersion) return;
   if (!people.some(m=>m.user_id===session?.user.id)) { await loadHomes(); return; }
-  entries=items; members=people; activity=changes;
+  entries=items; members=people; activity=changes; routines=templates; routineDays=exceptions;
   const focused=document.activeElement;
   if (focused?.id==='search' && document.querySelector('#results')) document.querySelector('#results').innerHTML=results(view);
   else if (!editor.open && !busy && !app.querySelector('form:focus-within')) render();
@@ -284,7 +328,7 @@ async function loadHomes(preferred) {
 async function selectHouse(next) {
   const previous=subscription;
   subscription=undefined;
-  household=next; currentInviteLink=''; entries=[]; members=[]; notice='';
+  household=next; currentInviteLink=''; entries=[]; members=[]; routines=[]; routineDays=[]; routineDate=dateKey(); notice='';
   if (previous) await db.removeChannel(previous);
   if (!next || household?.id!==next.id || !session) { render(); return; }
   localStorage.setItem('casa-home-'+session.user.id,next.id);
@@ -293,6 +337,8 @@ async function selectHouse(next) {
   const config = table=>({event:'*',schema:'public',table,filter:'household_id=eq.'+next.id});
   subscription=db.channel('casa-'+next.id)
     .on('postgres_changes',config('casa_entries'),()=>refresh().catch(e=>show(errorText(e))))
+    .on('postgres_changes',config('casa_routines'),()=>refresh().catch(showError))
+    .on('postgres_changes',config('casa_routine_days'),()=>refresh().catch(showError))
     .on('postgres_changes',config('casa_members'),()=>refresh().catch(e=>show(errorText(e))))
     .subscribe(state=>{if(state==='SUBSCRIBED') refresh().catch(e=>show(errorText(e)));});
 }
@@ -302,7 +348,7 @@ async function handleSession(next) {
   if (mode==='reset') {render(); return;}
   if (changed && next) {view='today'; await loadHomes();}
   if (!next) {
-    ++generation; household=undefined; entries=[]; members=[]; homes=[];
+    ++generation; household=undefined; entries=[]; members=[]; homes=[]; routines=[]; routineDays=[];
     if(subscription) {const old=subscription; subscription=undefined; await db.removeChannel(old);}
   }
   render();
@@ -310,6 +356,25 @@ async function handleSession(next) {
 async function submit(form) {
   const values=Object.fromEntries(new FormData(form));
   const type=form.dataset.form;
+  if (type==='routine') {
+    if (values.second_member && (!values.first_member || values.first_member===values.second_member)) {
+      throw new Error('Selecciona dos responsables distintos para alternar.');
+    }
+    if (values.reminder_minutes && !values.due_time) throw new Error('Indica una hora para el recordatorio.');
+    await result(db.from('casa_routines').insert({
+      household_id:household.id,title:values.title.trim(),starts_on:values.starts_on,
+      every_days:Number(values.every_days),first_member:values.first_member||null,second_member:values.second_member||null,
+      due_time:values.due_time||null,reminder_minutes:values.reminder_minutes===''?null:Number(values.reminder_minutes),
+    }));
+    routineDate=values.starts_on;
+    editor.close(); await refresh(); go('routine'); show(t('Guardado.')); return;
+  }
+  if (type==='routineDay') {
+    await result(db.rpc('casa_set_routine_day',{
+      h:household.id,r:form.dataset.id,target_day:routineDate,next_status:values.status,next_assignee:values.assignee||null,
+    }));
+    await refresh(); render(); show(t('Guardado.')); return;
+  }
   if (type==='auth') {
     const {email,password}=values;
     if (mode==='login') {
@@ -385,20 +450,31 @@ document.addEventListener('change',event=>{
   if(el.id==='app-language') {
     if (busy) {el.value=locale(); return;}
     const drafts=[...app.querySelectorAll('form[data-form]')].map(form=>({
-      type:form.dataset.form, values:new FormData(form),
+      type:form.dataset.form, id:form.dataset.id, values:new FormData(form),
     }));
     setLocale(el.value);
     localizeModules();
     notice='';
     render();
-    for (const {type,values} of drafts) {
-      const form=app.querySelector('form[data-form="'+type+'"]');
+    const forms=[...app.querySelectorAll('form[data-form]')];
+    for (const {type,id,values} of drafts) {
+      const form=forms.find(item=>item.dataset.form===type && item.dataset.id===id);
       for (const [name,value] of values) {
         const field=form?.elements.namedItem(name);
         if(field) field.value=value;
       }
     }
     document.querySelector('#app-language')?.focus();
+  }
+  if(el.id==='routine-date' && el.value) {
+    if (busy) {el.value=routineDate; return;}
+    void run(el,async()=>{
+      const previous=routineDate;
+      routineDate=el.value;
+      try { await refresh(); } catch(error) {routineDate=previous; el.value=previous; throw error;}
+      render();
+      document.querySelector('#routine-date')?.focus();
+    });
   }
   if(el.id==='status') {status=el.value; document.querySelector('#results').innerHTML=results(view);}
   if(el.id==='homes'||el.id==='mobile-homes') void run(el,async()=>{await selectHouse(homes.find(h=>h.id===el.value));go('today');});
@@ -423,6 +499,14 @@ document.addEventListener('click',event=>{
   if(d.month) {calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+Number(d.month),1,12);pickedDay=dateKey(calendarMonth);render();}
   if(d.act==='calendarToday') {pickedDay=dateKey();calendarMonth=fromKey(pickedDay);render();}
   if(d.act==='theme') {toggleTheme(); const control=button.querySelector('svg'); if(control) control.outerHTML=icon(currentTheme()==='dark'?'sun':'moon'); button.setAttribute('aria-label',currentTheme()==='dark'?t('Usar tema claro'):t('Usar tema oscuro'));}
+  if(d.act==='newRoutine') {
+    editor.innerHTML=routineEditor(routineDate,members,opts);
+    editor.showModal(); animateEntry(editor,14);
+  }
+  if(d.routineArchive && confirm(t('¿Archivar esta rutina?'))) void run(button,async()=>{
+    await result(db.from('casa_routines').update({archived:true}).eq('household_id',household.id).eq('id',d.routineArchive).select('id').single());
+    await refresh(); render();
+  });
   if(d.act==='close') editor.close();
   if(d.act==='google') void run(button,()=>result(db.auth.signInWithOAuth({provider:'google',options:{redirectTo:baseUrl()}})));
   if(d.file) void run(button,async()=>{
@@ -454,6 +538,7 @@ document.addEventListener('click',event=>{
     await result(db.from('casa_entries').update({archived:true}).eq('id',d.archive).eq('household_id',household.id).select('id').single());editor.close();await refresh();render();
   });
 });
+setInterval(updateRoutineNotice,30000);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&household) refresh().catch(showError);});
 app.textContent=t('Cargando Casa al Día…');
 db.auth.onAuthStateChange((event,current)=>{

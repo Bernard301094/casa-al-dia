@@ -7,7 +7,7 @@ const icons = {
  family:UsersRound, more:Grid2X2, lists:ListTodo, activity:Activity, location:MapPin,
  recipe:CookingPot, contact:ContactRound, birthday:Cake, schedule:Clock3, budget:ChartPie,
  photo:Images, document:FolderOpen, plus:Plus, moon:Moon, sun:Sun, signout:LogOut,
- chevron:ChevronRight, calendar:CalendarDays, left:ChevronLeft, right:ChevronRight,
+ chevron:ChevronRight, calendar:CalendarDays, routine:Clock3, left:ChevronLeft, right:ChevronRight,
 };
 
 export function icon(name, className = '') {

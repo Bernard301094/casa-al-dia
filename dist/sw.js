@@ -1,4 +1,4 @@
-const cacheName = 'casa-shell-v4';
+const cacheName = 'casa-shell-v5';
 const assets = ['app.css','style.css','app.js','icon.svg','icon-192.png','icon-512.png','manifest.webmanifest'];
 self.addEventListener('install',event => {
   event.waitUntil(caches.open(cacheName).then(cache => cache.addAll(assets)).then(() => self.skipWaiting()));

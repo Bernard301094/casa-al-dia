@@ -217,3 +217,5 @@ dialog .actions { flex-wrap:wrap }
   .page-head { flex-wrap:wrap; }
   .page-head .language-control { flex-basis:100%; margin-inline-start:0; }
 }
+#routine-notice:empty { display:none; }
+.routine-occurrence { padding-block:1rem; border-top:1px solid var(--line); }
