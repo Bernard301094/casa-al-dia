@@ -1,3 +1,4 @@
+import { pushConfigured, pushEnabled, enablePush, disablePush, listenForPush } from './push.js';
 import { occurrence, routinePanel, routineEditor } from './routines.js';
 import { t, locale, setLocale, languageControl, plural } from './i18n.js';
 import '@fontsource-variable/dm-sans/wght.css';
@@ -85,7 +86,8 @@ function errorText(error) {
   if (['Este navegador no admite ubicación.',
     'No pudimos obtener tu ubicación. Revisa el permiso del navegador.',
     'El archivo supera el límite de 20 MB.', 'Selecciona dos responsables distintos para alternar.',
-    'Indica una hora para el recordatorio.'].includes(msg)) return t(msg);
+    'Indica una hora para el recordatorio.', 'Este navegador no admite avisos push.',
+    'Activa el permiso de notificaciones en tu navegador.', 'No se pudo registrar este dispositivo.'].includes(msg)) return t(msg);
   return t('No se pudo completar la operación.') + (locale()==='es-419' && msg ? ' '+msg : '');
 }
 function authScreen() {
@@ -120,6 +122,12 @@ function render() {
     (!household || view==='family'?family():view==='today'?dashboard():view==='more'?more():view==='lists'?listHub():view==='activity'?activityPanel():view==='routine'?routinePanel({date:routineDate,routines,occurrences:routinesOn(routineDate),members,escape,options:opts}):view==='location'?locations():listing(view))+
     '</main>'+(household?navigation(['today','event','lists','message','more'],'bottom'):'')+'</div>';
 }
+function pushSettings() {
+  if (!pushConfigured) return '';
+  const enabled=pushEnabled(session.user.id);
+  return '<section class="panel"><h2>'+t('Avisos push')+'</h2><p>'+t('Recibe los recordatorios de rutinas en este dispositivo.')+'</p>'+
+    '<button data-act="'+(enabled?'disablePush':'enablePush')+'">'+t(enabled?'Desactivar avisos':'Activar avisos')+'</button></section>';
+}
 function family() {
   const owner = members.some(m=>m.user_id===session.user.id && m.role==='owner');
   const invite = sessionStorage.getItem(inviteStorage) ?? '';
@@ -127,7 +135,7 @@ function family() {
     (owner?("<button class=\"primary\" data-act=\"invite\">"+t("Generar invitación")+"</button><div id=\"invite-link\">")+inviteMarkup()+'</div>':'')+'</section>':'')+
     ("<section class=\"panel\"><h2>"+t("Crear hogar")+"</h2><form data-form=\"house\"><label>"+t("Nombre del hogar")+"<input name=\"house_name\" maxlength=\"80\" required></label><label>"+t("Tu nombre")+"<input name=\"member_name\" maxlength=\"80\" required></label><button class=\"primary\">"+t("Crear")+"</button></form></section>")+
     ("<section class=\"panel\"><h2>"+t("Unirse a un hogar")+"</h2><form data-form=\"join\"><label>"+t("Código de invitación")+"<input name=\"code\" required value=\"")+escape(invite)+("\"></label><label>"+t("Tu nombre")+"<input name=\"member_name\" maxlength=\"80\" required></label><button class=\"primary\">"+t("Unirme")+"</button></form></section>")+
-    ("</div><button data-act=\"logout\">"+t("Cerrar sesión")+"</button>");
+    pushSettings()+("</div><button data-act=\"logout\">"+t("Cerrar sesión")+"</button>");
 }
 function inviteMarkup() {
   if (!currentInviteLink) return '';
@@ -346,7 +354,7 @@ async function handleSession(next) {
   const changed=session?.user.id!==next?.user.id;
   session=next;
   if (mode==='reset') {render(); return;}
-  if (changed && next) {view='today'; await loadHomes();}
+  if (changed && next) {view='today'; await loadHomes(); void listenForPush(next.user.id,show).catch(()=>{});}
   if (!next) {
     ++generation; household=undefined; entries=[]; members=[]; homes=[]; routines=[]; routineDays=[];
     if(subscription) {const old=subscription; subscription=undefined; await db.removeChannel(old);}
@@ -526,7 +534,9 @@ document.addEventListener('click',event=>{
     await result(db.rpc('casa_withdraw_location',{h:household.id}));
     await refresh();render();
   });
-  if(d.act==='logout') void run(button,async()=>{await result(db.auth.signOut());mode='login';notice='';await handleSession(null);});
+  if(d.act==='enablePush') void run(button,async()=>{await enablePush(session.user.id,db,show);render();show(t('Dispositivo registrado para recibir avisos.'));});
+  if(d.act==='disablePush') void run(button,async()=>{await disablePush(session.user.id,db);render();show(t('Avisos desactivados en este dispositivo.'));});
+  if(d.act==='logout') void run(button,async()=>{await disablePush(session.user.id,db);await result(db.auth.signOut());mode='login';notice='';await handleSession(null);});
   if(d.act==='invite') void run(button,async()=>{
     const code=await result(db.rpc('casa_create_invite',{h:household.id}));
     const link=new URL(baseUrl());link.searchParams.set('invitar',code);

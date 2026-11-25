@@ -23,3 +23,9 @@ Explorar reúne listas, calendario, recetas, mensajes, galería, contactos, acti
 ## Rutinas y recordatorios
 
 En **Explorar → Rutinas**, crea una repetición diaria o semanal. Puedes escoger un responsable principal y otro alterno. Desde el selector de fecha puedes completar, omitir o reasignar esa fecha. Hoy muestra las rutinas pendientes de la fecha local del dispositivo. Si programas un aviso, se muestra dentro de la app mientras está abierta. Los avisos push con la app cerrada requieren la integración de Firebase Cloud Messaging.
+
+## Recordatorios push para rutinas
+
+La configuración pública de Firebase vive en `dist/firebase-config.js`. La app registra los dispositivos desde **Mi familia → Avisos push** y permite revocarlos. Firebase muestra un aviso genérico para mantener los detalles familiares fuera de la pantalla bloqueada. Supabase selecciona los turnos pendientes según el responsable, las excepciones y la zona horaria registrada por el dispositivo.
+
+Para habilitar el envío, guarda en los secretos de Edge Functions el JSON de una cuenta de servicio con permiso para enviar mensajes al proyecto Firebase bajo `FCM_SERVICE_ACCOUNT_JSON`. Crea un valor aleatorio de alta entropía para `ROUTINE_PUSH_SECRET` y guarda el mismo valor en Vault como `routine_push_secret`. Guarda también la URL base del proyecto Supabase en Vault con el nombre `routine_push_project_url`. El programador puede ejecutar `supabase/schedule-routine-push.sql` cuando esos valores estén disponibles. El SQL no contiene credenciales.

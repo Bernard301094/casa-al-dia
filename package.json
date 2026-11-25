@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "esbuild src/app.js --bundle --minify --platform=browser --target=es2022 --loader:.woff2=file --asset-names=assets/[name]-[hash] --outfile=dist/app.js"
+    "build": "esbuild src/app.js --bundle --minify --platform=browser --target=es2022 --loader:.woff2=file --asset-names=assets/[name]-[hash] --outfile=dist/app.js && esbuild src/push-worker.js --bundle --minify --platform=browser --target=es2022 --outfile=dist/push-worker.js"
   },
   "keywords": [],
   "author": "",
@@ -16,6 +16,7 @@
     "@fontsource-variable/outfit": "^5.3.0",
     "@supabase/supabase-js": "^2.119.2",
     "esbuild": "^0.28.2",
+    "firebase": "^13.4.0",
     "lucide": "^1.79.0",
     "motion": "^14.14.0"
   }
