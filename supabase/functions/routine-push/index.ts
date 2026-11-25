@@ -24,17 +24,27 @@ async function authorize(account: ServiceAccount) {
 }
 
 Deno.serve(async request => {
-  const secret = Deno.env.get("ROUTINE_PUSH_SECRET");
-  if (request.method!=="POST" || !secret || request.headers.get("Authorization")!=="Bearer "+secret) {
-    return new Response(null,{status:403});
-  }
+  const candidate = request.headers.get("Authorization")?.match(/^Bearer ([a-f0-9]{64})$/)?.[1];
+  if (request.method!=="POST" || !candidate) return new Response(null,{status:403});
   try {
-    const account = JSON.parse(Deno.env.get("FCM_SERVICE_ACCOUNT_JSON") || "null") as ServiceAccount | null;
-    if (!account) return Response.json({error:"FCM is awaiting configuration"},{status:503});
-    const access = await authorize(account);
     const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
       auth:{persistSession:false,autoRefreshToken:false},
     });
+    const authorization=await db.rpc("casa_verify_push_invocation",{candidate});
+    if (authorization.error) throw authorization.error;
+    if (!authorization.data) return new Response(null,{status:403});
+    const account = JSON.parse(Deno.env.get("FCM_SERVICE_ACCOUNT_JSON") || "null") as ServiceAccount | null;
+    if (!account) return Response.json({error:"FCM is awaiting configuration"},{status:503});
+    if (account.project_id!=="casa-al-dia-243df") return Response.json({error:"Unexpected Firebase project"},{status:422});
+    const access = await authorize(account);
+    if (request.headers.get("x-casa-probe")==="1") {
+      const response=await fetch("https://fcm.googleapis.com/v1/projects/"+account.project_id+"/messages:send",{
+        method:"POST",headers:{Authorization:"Bearer "+access,"Content-Type":"application/json"},
+        body:JSON.stringify({validate_only:true,message:{topic:"casa-validation",notification:{title:"Casa al Día"}}}),
+        signal:AbortSignal.timeout(10000),
+      });
+      return Response.json({validated:response.ok,provider_status:response.status},{status:response.ok?200:502});
+    }
     const {data: jobs,error} = await db.rpc("casa_claim_routine_push");
     if (error) throw error;
     let sent=0, failed=0;
