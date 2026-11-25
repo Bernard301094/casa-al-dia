@@ -1,12 +1,13 @@
-export const moduleDetails = {
-  recipe:['Recetas','♨','receta','Guarda ingredientes y pasos para cocinar en familia.'],
-  contact:['Contactos','✆','contacto','Ten a mano los números y correos importantes.'],
-  birthday:['Cumpleaños','✦','cumpleaños','Consulta las próximas celebraciones del hogar.'],
-  schedule:['Horario','◷','horario','Organiza los bloques de la semana.'],
-  budget:['Presupuesto','＄','presupuesto','Compara el límite del mes con el gasto registrado.'],
-  photo:['Galería','▧','archivo','Comparte fotos y videos con tu hogar.'],
-  document:['Documentos','▤','documento','Sube y descarga archivos privados de tu hogar.'],
-};
+import { t } from './i18n.js';
+export const moduleDetails = () => ({
+  recipe:[t('Recetas'),'♨',t('receta'),t('Guarda ingredientes y pasos para cocinar en familia.')],
+  contact:[t('Contactos'),'✆',t('contacto'),t('Ten a mano los números y correos importantes.')],
+  birthday:[t('Cumpleaños'),'✦',t('cumpleaños'),t('Consulta las próximas celebraciones del hogar.')],
+  schedule:[t('Horario'),'◷',t('horario'),t('Organiza los bloques de la semana.')],
+  budget:[t('Presupuesto'),'＄',t('presupuesto'),t('Compara el límite del mes con el gasto registrado.')],
+  photo:[t('Galería'),'▧',t('archivo'),t('Comparte fotos y videos con tu hogar.')],
+  document:[t('Documentos'),'▤',t('documento'),t('Sube y descarga archivos privados de tu hogar.')],
+});
 export const fileKinds = {
   photo:{bucket:'casa-gallery',accept:'image/jpeg,image/png,image/webp,image/gif,image/avif,video/mp4,video/webm,video/quicktime'},
   document:{bucket:'casa-documents',accept:'application/pdf,text/plain,.docx,.xlsx,image/jpeg,image/png,image/webp'},

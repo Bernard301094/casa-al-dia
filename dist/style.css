@@ -208,3 +208,12 @@ dialog .actions { flex-wrap:wrap }
 @media(prefers-reduced-motion:reduce) {
   *,*::before,*::after { animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important }
 }
+
+.language-control { display:flex; align-items:center; flex-wrap:wrap; gap:.4rem .55rem; color:var(--muted); font-size:.82rem; }
+.language-control select { width:auto; max-width:100%; font-size:.88rem; font-weight:640; }
+.page-head .language-control { margin-inline-start:auto; }
+.auth-form .language-control { justify-content:space-between; }
+@media(max-width:700px) {
+  .page-head { flex-wrap:wrap; }
+  .page-head .language-control { flex-basis:100%; margin-inline-start:0; }
+}
