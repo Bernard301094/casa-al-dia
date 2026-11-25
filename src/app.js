@@ -25,6 +25,7 @@ const db = createClient(url, key, {global:{fetch:(input,init={})=>{
 const app = document.querySelector('#app');
 const editor = document.querySelector('#editor');
 let modules, descriptions;
+let assistantDrafts=[];
 let googleEvents=[];
 function localizeModules() {
   const extras = moduleDetails();
@@ -167,12 +168,13 @@ function navigation(keys, css) {
 function render() {
   if (!session || mode === 'reset') { authScreen(); return; }
   const homeBar = homes.length ? ("<label>"+t("Hogar")+"<select id=\"homes\">")+opts(homes.map(h=>[h.id,h.name]),household?.id)+'</select></label>' : '';
+  const ai = household&&view==='today'?'<button data-act="aiDraft">'+t('Crear con IA')+'</button>':'';
   const add = descriptions[view] && household ? '<button class="primary" data-new="'+view+'">'+icon('plus')+t('Agregar')+'</button>' : '';
   const invite = sessionStorage.getItem(inviteStorage);
   const top = household ? modules[view][0] : t('Tu hogar');
   app.innerHTML = '<div class="shell"><aside class="side">'+brand+homeBar+
     (household?navigation(['today','event','lists','routine','shopping','meal','more','family'],'nav'):'')+
-    '<button class="side-footer" data-act="logout">'+icon('signout')+(t("Cerrar sesión")+"</button></aside><main class=\"content\"><header class=\"page-head\"><div><div class=\"workspace-label\">")+escape(household?.name ?? 'Casa al Día')+'</div><h1>'+top+'</h1></div><div class="actions">'+add+themeControl()+'</div>'+languageControl()+'</header>'+
+    '<button class="side-footer" data-act="logout">'+icon('signout')+(t("Cerrar sesión")+"</button></aside><main class=\"content\"><header class=\"page-head\"><div><div class=\"workspace-label\">")+escape(household?.name ?? 'Casa al Día')+'</div><h1>'+top+'</h1></div><div class="actions">'+add+ai+themeControl()+'</div>'+languageControl()+'</header>'+
     '<p id="notice" class="notice" role="status">'+escape(notice)+'</p>'+
     (invite && view!== 'family' && household?("<button data-view=\"family\">"+t("Tienes una invitación pendiente")+"</button>"):'')+
     '<section id="sync-status" class="sync-status" aria-live="polite">'+syncMarkup()+'</section>'+
@@ -530,7 +532,7 @@ async function synchronize() {
 }
 function syncSoon() { void synchronize().catch(showError); }
 function draftScope(form) {
-  if (!household || !form || ['auth','house','join','scan-event','google-calendar-import'].includes(form.dataset.form)) return '';
+  if (!household || !form || ['auth','house','join','scan-event','google-calendar-import','ai-review'].includes(form.dataset.form)) return '';
   return [household.id,form.dataset.form,form.dataset.type,form.dataset.kind,form.dataset.id,form.dataset.board].join(':')+(form.dataset.source?':'+form.dataset.source:'');
 }
 async function showEditor() {
@@ -607,6 +609,38 @@ async function handleSession(next) {
 async function submit(form) {
   const values=Object.fromEntries(new FormData(form));
   const type=form.dataset.form;
+  if(type==='ai-draft') {
+    const {data:{session:verified}}=await db.auth.getSession();
+    if(!verified) throw new Error(t('Vuelve a iniciar sesión.'));
+    const response=await fetch(url+'/functions/v1/ai-drafts',{
+      method:'POST',headers:{authorization:'Bearer '+verified.access_token,apikey:key,'Content-Type':'application/json'},
+      body:JSON.stringify({text:values.text,date:dateKey(),household:household.id}),signal:AbortSignal.timeout(30000),
+    });
+    const result=await response.json();
+    if(!response.ok) throw new Error(t(({not_configured:'Configura OPENROUTER_API_KEY en Supabase.',quota:'Límite diario de IA alcanzado.'})[result.error]||'No se pudieron generar borradores.'));
+    assistantDrafts=result.items;
+    editor.innerHTML='<h2>'+t('Revisar borradores')+'</h2><form data-form="ai-review">'+
+      assistantDrafts.map((item,index)=>'<fieldset><legend>'+modules[item.kind][0]+'</legend>'+
+        '<label class="recipe-check"><input type="checkbox" name="selected" value="'+index+'" checked> '+t('Guardar este borrador')+'</label>'+
+        '<label>'+t('Título')+'<input name="title-'+index+'" maxlength="160" value="'+escape(item.title)+'"></label>'+
+        (item.kind==='shopping'?'':'<label>'+t('Fecha')+'<input type="date" name="date-'+index+'" value="'+escape(item.entry_date)+'"></label>'+
+        '<label>'+t('Hora')+'<input type="time" name="time-'+index+'" value="'+escape(item.entry_time)+'"></label>')+'</fieldset>').join('')+
+      '<p id="form-error" class="notice" role="alert"></p><div class="actions">'+
+      (assistantDrafts.length?'<button class="primary">'+t('Guardar')+'</button>':'<p>'+t('No se encontraron borradores.')+'</p>')+
+      '<button type="button" data-act="close">'+t('Cerrar')+'</button></div></form>';
+    return;
+  }
+  if(type==='ai-review') {
+    const selected=new FormData(form).getAll('selected');
+    const records=selected.map(index=>{
+      const original=assistantDrafts[Number(index)];
+      const title=values['title-'+index]?.trim(), day=values['date-'+index]||null;
+      if(!title||(['event','deadline'].includes(original.kind)&&!day)) throw new Error(t('Revisa los títulos y las fechas obligatorias.'));
+      return {kind:original.kind,title,entry_date:day,entry_time:values['time-'+index]||null};
+    });
+    if(!records.length) throw new Error(t('Selecciona al menos un borrador.'));
+    await saveEntries(records);assistantDrafts=[];editor.close();render();show(t('Guardado.'));return;
+  }
   if (type==='scan-event') {
     const file=values.source_file;
     if (!file?.size || file.size>10000000) throw new Error('Selecciona una foto o PDF de hasta 10 MB.');
@@ -928,6 +962,15 @@ document.addEventListener('click',event=>{
   if(d.edit) {const entry=entries.find(i=>i.id===d.edit);if(entry) openEditor(entry.kind,entry);}
   if(d.day) {pickedDay=d.day; calendarMonth=fromKey(pickedDay);render();}
   if(d.month) {calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+Number(d.month),1,12);pickedDay=dateKey(calendarMonth);render();}
+  if(d.act==='aiDraft') {
+    assistantDrafts=[];
+    editor.innerHTML='<h2>'+t('Crear con IA')+'</h2><form data-form="ai-draft"><p>'+
+      t('Solo el texto de este formulario se envía a OpenRouter cuando pulsas Generar borradores.')+'</p>'+
+      '<label>'+t('Texto para organizar')+'<textarea name="text" rows="5" maxlength="4000" required></textarea></label>'+
+      '<p id="form-error" class="notice" role="alert"></p><div class="actions"><button class="primary">'+t('Generar borradores')+
+      '</button><button type="button" data-act="close">'+t('Cancelar')+'</button></div></form>';
+    void showEditor();
+  }
   if(d.act==='calendarFeed') void run(button,async()=>{
     const filterFeed=()=>db.from('casa_calendar_feeds').select('token').eq('household_id',household.id).eq('user_id',session.user.id);
     const feed=await result(filterFeed().maybeSingle());
